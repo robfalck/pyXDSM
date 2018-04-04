@@ -1,5 +1,6 @@
 from __future__ import print_function
 import os
+from six import iteritems, string_types
 import numpy as np
 
 tikzpicture_template = r"""
@@ -56,8 +57,8 @@ tex_template = r"""
 \end{{document}}
 """
 
-class XDSM(object):
 
+class XDSM(object):
     def __init__(self):
         self.comps = []
         self.connections = []
@@ -71,13 +72,22 @@ class XDSM(object):
         self.comps.append([node_name, style, label, stack, faded])
 
     def add_input(self, name, label, style='DataIO', stack=False):
-        self.ins[name] = ('output_'+name, style, label, stack)
+        if name in self.ins:
+            self.ins[name][2].append(label)
+        else:
+            self.ins[name] = ['input_' + name, style, [label], stack]
 
     def add_output(self, name, label, style='DataIO', stack=False, side="left"):
         if side == "left":
-            self.left_outs[name] = ('left_output_'+name, style, label, stack)
+            if name in self.left_outs:
+                self.left_outs[name][2].append(label)
+            else:
+                self.left_outs[name] = ['left_output_' + name, style, [label], stack]
         elif side == "right":
-            self.right_outs[name] = ('right_output_'+name, style, label, stack)
+            if name in self.right_outs:
+                self.right_outs[name][2].append(label)
+            else:
+                self.right_outs[name] = ['right_output_' + name, style, [label], stack]
 
     def connect(self, src, target, label, style='DataInter', stack=False, faded=False):
         if src == target:
@@ -87,6 +97,74 @@ class XDSM(object):
     def add_process(self, systems, arrow=True):
         self.processes.append(systems)
         self.process_arrows.append(arrow)
+
+    def from_openmdao_group(self, group, var_map=None):
+        """
+        Initializes a new XDSM from the given OpenMDAO group.
+
+        Parameters
+        ----------
+        group : openmdao.api.group
+            The group from which the XDSM should be constructed.
+
+        """
+
+        # Reset all members
+        self.comps = []
+        self.connections = []
+        self.left_outs = {}
+        self.right_outs = {}
+        self.ins = {}
+        self.processes = []
+        self.process_arrows = []
+
+        subsystems_ordered = group._subsystems_allprocs
+        input_srcs = group._conn_global_abs_in2out
+
+        connections = {
+            tgt: src for tgt, src in iteritems(input_srcs) if src is not None
+        }
+
+        src2tgts = {}
+        units = {n: data.get('units', '')
+                 for n, data in iteritems(group._var_allprocs_abs2meta)}
+
+        noconn_srcs = sorted((n for n in group._var_abs_names['output']
+                              if n not in src2tgts), reverse=True)
+
+        inputs = group.list_inputs(out_stream=None)
+        outputs = group.list_outputs(out_stream=None)
+
+        opt = 'Optimization'
+        solver = 'MDA'
+        comp = 'Analysis'
+        group = 'Metamodel'
+        func = 'Function'
+
+        unconnected_outputs = set([o[0] for o in outputs])
+        unconnected_inputs = set([input[0] for input in inputs])
+
+        var_map = {} if var_map is None else var_map
+
+        for system in subsystems_ordered:
+            self.add_system(system.name, comp, r'{0}'.format(system.name.replace('_', ' ')))
+
+        for tgt, src in iteritems(connections):
+            unconnected_outputs.remove(src)
+            unconnected_inputs.remove(tgt)
+            name = src.split('.')[-1]
+            label = var_map.get(name, name)
+            self.connect(src.split('.')[0], tgt.split('.')[0], label)
+
+        for output in sorted(unconnected_outputs):
+            block, name = output.split('.')
+            label = var_map.get(name, name)
+            self.add_output(block, label, side='right')
+
+        for input in sorted(unconnected_inputs):
+            block, name = input.split('.')
+            label = var_map.get(name, name)
+            self.add_input(block, label)
 
     def _build_node_grid(self):
         size = len(self.comps)
@@ -119,10 +197,10 @@ class XDSM(object):
 
         # add all the components on the diagonal
         for i_row, j_col, comp in zip(comps_rows, comps_cols, self.comps):
-            style=comp[1]
-            if comp[3] == True: #stacking
+            style = comp[1]
+            if comp[3] == True:  # stacking
                 style += ',stack'
-            if comp[4] == True: #stacking
+            if comp[4] == True:  # stacking
                 style += ',faded'
 
             node = node_str.format(style=style, node_name=comp[0], node_label=comp[2])
@@ -138,13 +216,13 @@ class XDSM(object):
 
             loc = (src_row, target_col)
 
-            style=style
-            if stack == True: #stacking
+            style = style
+            if stack == True:  # stacking
                 style += ',stack'
             if faded == True:
                 style += ',faded'
 
-            node_name = '{}-{}'.format(src,target)
+            node_name = '{}-{}'.format(src, target)
             node = node_str.format(style=style,
                                    node_name=node_name,
                                    node_label=label)
@@ -153,50 +231,50 @@ class XDSM(object):
 
         # add the nodes for left outputs
         for comp_name, out_data in self.left_outs.items():
-            node_name, style, label, stack = out_data
+            node_name, style, labels, stack = out_data
             if stack:
                 style += ',stack'
 
             i_row = row_idx_map[comp_name]
-            loc = (i_row,0)
+            loc = (i_row, 0)
             node = node_str.format(style=style,
                                    node_name=node_name,
-                                   node_label=label)
+                                   node_label=r' \\ '.join(labels))
 
             grid[loc] = node
 
-         # add the nodes for right outputs
+            # add the nodes for right outputs
         for comp_name, out_data in self.right_outs.items():
-            node_name, style, label, stack = out_data
+            node_name, style, labels, stack = out_data
             if stack:
                 style += ',stack'
 
             i_row = row_idx_map[comp_name]
-            loc = (i_row,-1)
+            loc = (i_row, -1)
             node = node_str.format(style=style,
                                    node_name=node_name,
-                                   node_label=label)
+                                   node_label=r' \\ '.join(labels))
 
             grid[loc] = node
 
         # add the inputs to the top of the grid
         for comp_name, in_data in self.ins.items():
-            node_name, style, label, stack = in_data
+            node_name, style, labels, stack = in_data
             if stack:
                 style = ',stack'
 
             j_col = col_idx_map[comp_name]
-            loc = (0,j_col)
+            loc = (0, j_col)
             node = node_str.format(style=style,
                                    node_name=node_name,
-                                   node_label=label)
+                                   node_label=r' \\ '.join(labels))
 
             grid[loc] = node
 
         # mash the grid data into a string
         rows_str = ''
         for i, row in enumerate(grid):
-            rows_str += "%Row {}\n".format(i) +'&\n'.join(row) + r'\\'+'\n'
+            rows_str += "%Row {}\n".format(i) + '&\n'.join(row) + r'\\' + '\n'
 
         return rows_str
 
@@ -206,7 +284,7 @@ class XDSM(object):
 
         edge_string = "({start}) edge [DataLine] ({end})"
         for src, target, style, label, stack, faded in self.connections:
-            od_node_name = '{}-{}'.format(src,target)
+            od_node_name = '{}-{}'.format(src, target)
             h_edges.append(edge_string.format(start=src, end=od_node_name))
             v_edges.append(edge_string.format(start=od_node_name, end=target))
 
@@ -237,7 +315,9 @@ class XDSM(object):
             chain_str += "{ [start chain=process]\n \\begin{pgfonlayer}{process} \n"
             for i, sys in enumerate(proc):
                 if sys not in sys_names:
-                    raise ValueError('process includes a system named "{}" but no system with that name exists.'.format(sys))
+                    raise ValueError(
+                        'process includes a system named "{}" but no system with that name exists.'.format(
+                            sys))
                 if i == 0:
                     chain_str += "\\chainin ({});\n".format(sys)
                 else:
