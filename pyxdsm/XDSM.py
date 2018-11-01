@@ -2,6 +2,8 @@ from __future__ import print_function
 import os
 import numpy as np
 
+from six import iteritems
+
 tikzpicture_template = r"""
 %%% Preamble Requirements %%%
 % \usepackage{{geometry}}
@@ -89,6 +91,133 @@ class XDSM(object):
     def add_process(self, systems, arrow=True):
         self.processes.append(systems)
         self.process_arrows.append(arrow)
+
+    def from_openmdao_group(self, group, var_map=None, sys_map=None, stack_groups=True):
+        """
+        Initializes a new XDSM from the given OpenMDAO group.
+
+        Parameters
+        ----------
+        group : openmdao.api.Group
+            The group from which the XDSM should be constructed.
+        var_map : dict
+            A dictionary which maps variable names to a LaTex representation.  For instance,
+            to display variable m_dot in a more LaTex-based way provide
+            `var_map = {'m_dot', $\dot{m}$}`
+        sys_map : dict
+            A dictionary which maps system names to a LaTex representation.  By default, underscores
+            in system names are replaced with spaces.
+        stack_groups : bool
+            If True, Groups will be displayed as 'stacked' systems.
+
+        """
+        from openmdao.api import Problem, Group
+
+        # Reset all members
+        self.comps = []
+        self.connections = []
+        self.left_outs = {}
+        self.right_outs = {}
+        self.ins = {}
+        self.processes = []
+        self.process_arrows = []
+
+        p = Problem()
+        p.model = group
+        p.setup(check=False)
+        p.final_setup()
+
+        subsystems_ordered = group._subsystems_allprocs
+        input_srcs = group._conn_global_abs_in2out
+
+        connections = {
+            tgt: src for tgt, src in iteritems(input_srcs) if src is not None
+        }
+
+        src2tgts = {}
+        units = {n: data.get('units', '')
+                 for n, data in iteritems(group._var_allprocs_abs2meta)}
+
+        noconn_srcs = sorted((n for n in group._var_abs_names['output']
+                              if n not in src2tgts), reverse=True)
+
+        inputs = group.list_inputs(out_stream=None)
+        outputs = group.list_outputs(out_stream=None)
+
+        opt = 'Optimization'
+        solver = 'MDA'
+        comp = 'Analysis'
+        group = 'Metamodel'
+        func = 'Function'
+
+        unconnected_outputs = set([o[0] for o in outputs])
+        unconnected_inputs = set([input[0] for input in inputs])
+
+        var_map = {} if var_map is None else var_map
+        sys_map = {} if sys_map is None else sys_map
+
+        for system in subsystems_ordered:
+            if isinstance(system, Group):
+                sys_type = group
+            else:
+                sys_type = comp
+            sys_name = sys_map.get(system.name, system.name.replace('_', r'\_'))
+            self.add_system(system.name, sys_type, sys_name,
+                            stack=(sys_type == group and stack_groups))
+
+        collected_connections = {}
+        for tgt, src in iteritems(connections):
+            try:
+                unconnected_outputs.remove(src)
+            except:
+                pass
+            try:
+                unconnected_inputs.remove(tgt)
+            except:
+                pass
+            name = src.split('.')[-1]
+            label = var_map.get(name, '${0}$'.format(name.replace('_', r'\_')))
+
+            src_sys = src.split('.')[0]
+            tgt_sys = tgt.split('.')[0]
+
+            if src_sys != tgt_sys:
+                if (src_sys, tgt_sys) not in collected_connections:
+                    collected_connections[src_sys, tgt_sys] = []
+                collected_connections[src_sys, tgt_sys].append(label)
+
+        for (src_sys, tgt_sys) in collected_connections:
+            self.connect(src_sys, tgt_sys, r'\\'.join(collected_connections[src_sys, tgt_sys]))
+
+
+        block_outputs = {}
+
+        for output in sorted(unconnected_outputs):
+            block = output.split('.')[0]
+            if block not in block_outputs:
+                block_outputs[block] = set()
+            name = output.split('.')[-1]
+            label = var_map.get(name, '${0}$'.format(name))
+            block_outputs[block].add(label)
+
+        for block in block_outputs:
+            for label in block_outputs[block]:
+                self.add_output(block, label, side='right')
+
+        block_inputs = {}
+
+        for input in sorted(unconnected_inputs):
+            block = input.split('.')[0]
+            if block not in block_inputs:
+                block_inputs[block] = set()
+            name = input.split('.')[-1]
+            label = var_map.get(name, '${0}$'.format(name))
+            print(block, label, block_inputs[block])
+            block_inputs[block].add(label)
+
+        for block in block_inputs:
+            for label in block_inputs[block]:
+                self.add_input(block, label)
 
     def _parse_label(self, label):
         if isinstance(label, (tuple, list)):
