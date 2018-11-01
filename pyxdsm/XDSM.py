@@ -92,14 +92,15 @@ class XDSM(object):
         self.processes.append(systems)
         self.process_arrows.append(arrow)
 
-    def from_openmdao_group(self, group, var_map=None, sys_map=None, stack_groups=True):
+    def from_openmdao_group(self, arg, var_map=None, sys_map=None, vars_per_line=4,
+                            output_whitelist=None):
         """
         Initializes a new XDSM from the given OpenMDAO group.
 
         Parameters
         ----------
-        group : openmdao.api.Group
-            The group from which the XDSM should be constructed.
+        group : openmdao.api.Group or openmdao.api.Problem
+            The problem or group from which the XDSM should be constructed.
         var_map : dict
             A dictionary which maps variable names to a LaTex representation.  For instance,
             to display variable m_dot in a more LaTex-based way provide
@@ -107,11 +108,16 @@ class XDSM(object):
         sys_map : dict
             A dictionary which maps system names to a LaTex representation.  By default, underscores
             in system names are replaced with spaces.
-        stack_groups : bool
-            If True, Groups will be displayed as 'stacked' systems.
+        vars_per_line : int
+            The number of variables to be written per line for inputs, outputs, and connections.
 
         """
         from openmdao.api import Problem, Group
+
+        if isinstance(arg, Problem):
+            group = arg.model
+        else:
+            group = arg
 
         # Reset all members
         self.comps = []
@@ -134,12 +140,12 @@ class XDSM(object):
             tgt: src for tgt, src in iteritems(input_srcs) if src is not None
         }
 
-        src2tgts = {}
-        units = {n: data.get('units', '')
-                 for n, data in iteritems(group._var_allprocs_abs2meta)}
-
-        noconn_srcs = sorted((n for n in group._var_abs_names['output']
-                              if n not in src2tgts), reverse=True)
+        # src2tgts = {}
+        # units = {n: data.get('units', '')
+        #          for n, data in iteritems(sys._var_allprocs_abs2meta)}
+        #
+        # noconn_srcs = sorted((n for n in sys._var_abs_names['output']
+        #                       if n not in src2tgts), reverse=True)
 
         inputs = group.list_inputs(out_stream=None)
         outputs = group.list_outputs(out_stream=None)
@@ -147,7 +153,7 @@ class XDSM(object):
         opt = 'Optimization'
         solver = 'MDA'
         comp = 'Analysis'
-        group = 'Metamodel'
+        grp = 'Metamodel'
         func = 'Function'
 
         unconnected_outputs = set([o[0] for o in outputs])
@@ -156,15 +162,29 @@ class XDSM(object):
         var_map = {} if var_map is None else var_map
         sys_map = {} if sys_map is None else sys_map
 
+        # If provided a problem with a driver, add the design variables and constraints
+        if isinstance(arg, Problem) and arg.driver is not None:
+            self.add_system('opt', opt, 'Optimizer')
+            print(dir(p.driver))
+            print(p.driver._cons)
+            print(list(p.driver._cons.keys()))
+            print(list(p.driver._objs.keys()))
+            for var, options in p.driver._cons.items():
+                src_sys = var.split('.')[0]
+                name = var.split('.')[-1]
+                label = 'g({0})'.format(var_map.get(name, name))
+                self.connect(src_sys, 'opt', label)
+
+        # Add the subsystems to the XDSM
         for system in subsystems_ordered:
             if isinstance(system, Group):
-                sys_type = group
+                sys_type = grp
             else:
                 sys_type = comp
             sys_name = sys_map.get(system.name, system.name.replace('_', r'\_'))
-            self.add_system(system.name, sys_type, sys_name,
-                            stack=(sys_type == group and stack_groups))
+            self.add_system(system.name, sys_type, sys_name)
 
+        # Organize connections so that all connections between two systems are grouped
         collected_connections = {}
         for tgt, src in iteritems(connections):
             try:
@@ -176,7 +196,7 @@ class XDSM(object):
             except:
                 pass
             name = src.split('.')[-1]
-            label = var_map.get(name, '${0}$'.format(name.replace('_', r'\_')))
+            label = var_map.get(name, '{0}'.format(name.replace('_', r'\_')))
 
             src_sys = src.split('.')[0]
             tgt_sys = tgt.split('.')[0]
@@ -186,38 +206,52 @@ class XDSM(object):
                     collected_connections[src_sys, tgt_sys] = []
                 collected_connections[src_sys, tgt_sys].append(label)
 
+        # For each pair of connected systems, add the appropriate connection info
         for (src_sys, tgt_sys) in collected_connections:
-            self.connect(src_sys, tgt_sys, r'\\'.join(collected_connections[src_sys, tgt_sys]))
+            vars = collected_connections[src_sys, tgt_sys]
+            lines = []
+            while vars:
+                lines.append(', '.join(vars[:vars_per_line]))
+                del vars[:vars_per_line]
+            self.connect(src_sys, tgt_sys, lines)
 
-
+        # Collect the unconnected outputs from each system
         block_outputs = {}
-
         for output in sorted(unconnected_outputs):
             block = output.split('.')[0]
             if block not in block_outputs:
                 block_outputs[block] = set()
             name = output.split('.')[-1]
-            label = var_map.get(name, '${0}$'.format(name))
+            label = var_map.get(name, name)
             block_outputs[block].add(label)
 
+        # Add the unconnected outputs for each system
         for block in block_outputs:
-            for label in block_outputs[block]:
-                self.add_output(block, label, side='right')
+            outputs = [output for output in block_outputs[block] if output_whitelist is None or output in output_whitelist]
+            lines = []
+            while outputs:
+                lines.append(', '.join(outputs[:vars_per_line]))
+                del outputs[:vars_per_line]
+            self.add_output(block, lines, side='right')
 
+        # Collect the unconnected inputs from each system
         block_inputs = {}
-
         for input in sorted(unconnected_inputs):
             block = input.split('.')[0]
             if block not in block_inputs:
                 block_inputs[block] = set()
             name = input.split('.')[-1]
-            label = var_map.get(name, '${0}$'.format(name))
-            print(block, label, block_inputs[block])
+            label = var_map.get(name, name)
             block_inputs[block].add(label)
 
+        # Add the unconnected outputs for each system
         for block in block_inputs:
-            for label in block_inputs[block]:
-                self.add_input(block, label)
+            inputs = [input for input in block_inputs[block]]
+            lines = []
+            while inputs:
+                lines.append(', '.join(inputs[:vars_per_line]))
+                del inputs[:vars_per_line]
+            self.add_input(block, lines)
 
     def _parse_label(self, label):
         if isinstance(label, (tuple, list)):
