@@ -266,21 +266,31 @@ with ui.element('div').classes('relative w-full h-screen'):
     disciplines = build_disciplines_from_xdsm(gui_instance.xdsm)
     connections = build_connection_matrix(gui_instance.xdsm)
 
+    # Create the DragGrid and store reference
+    xdsm_grid = dnd.DragGrid(
+        disciplines=disciplines,
+        on_reorder=None,  # Will set after defining the callback
+        connections=connections,
+        columns=len(disciplines)
+    ).classes('gap-x-1 gap-y-8')
+
     def on_reorder(reordered_disciplines):
         """Handle reordering of disciplines in the GUI."""
         # Update the XDSM object to match the new order
         gui_instance.sync_from_disciplines(reordered_disciplines)
 
+        # Rebuild the connection matrix based on the new system order
+        new_connections = build_connection_matrix(gui_instance.xdsm)
+
+        # Update the grid with the new connections
+        xdsm_grid.update_connections(new_connections)
+
         # Show notification with the new order
         system_names = [sys.node_name for sys in gui_instance.xdsm.systems]
         ui.notify(f'XDSM systems reordered: {system_names}')
 
-    dnd.DragGrid(
-        disciplines=disciplines,
-        on_reorder=on_reorder,
-        connections=connections,
-        columns=len(disciplines)
-    ).classes('gap-x-1 gap-y-8')
+    # Set the callback after defining it
+    xdsm_grid.on_reorder_callback = on_reorder
 
 
     # with ui.row():

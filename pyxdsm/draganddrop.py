@@ -306,6 +306,16 @@ class DragGrid(ui.grid):
         # Set up drop zones on each diagonal cell
         self.render()
 
+    def update_connections(self, connections: dict):
+        """
+        Update the connection matrix and re-render the grid.
+
+        Args:
+            connections: New dictionary mapping (row, col) tuples to connection labels
+        """
+        self.connections = connections
+        self.render()
+
     def render(self):
         """Render the XDSM grid with disciplines on diagonal and data off-diagonal."""
         # Clear existing content
