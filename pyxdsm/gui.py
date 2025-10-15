@@ -93,9 +93,167 @@ class XDSMGUI:
         """
         return self.xdsm
 
+    def reorder_systems(self, source_index: int, target_index: int):
+        """
+        Reorder systems in the XDSM when they are dragged in the GUI.
+
+        Parameters
+        ----------
+        source_index : int
+            The original index of the system being moved
+        target_index : int
+            The new index where the system should be placed
+        """
+        if source_index < 0 or source_index >= len(self.xdsm.systems):
+            return
+        if target_index < 0 or target_index >= len(self.xdsm.systems):
+            return
+        if source_index == target_index:
+            return
+
+        # Reorder the systems list
+        system = self.xdsm.systems.pop(source_index)
+        self.xdsm.systems.insert(target_index, system)
+
+    def sync_from_disciplines(self, disciplines: list):
+        """
+        Synchronize the XDSM systems list from the GUI disciplines list.
+
+        This updates the XDSM to match the current order and state of
+        the disciplines shown in the GUI.
+
+        Parameters
+        ----------
+        disciplines : list
+            List of XDSMElement instances from the GUI
+        """
+        # Map discipline titles back to system nodes
+        # We need to find which system corresponds to each discipline
+        new_order = []
+        for discipline in disciplines:
+            # Find the system with matching label
+            for system in self.xdsm.systems:
+                system_label = system.label
+                if isinstance(system_label, (list, tuple)):
+                    system_label = ', '.join(system_label)
+
+                if system_label == discipline.title:
+                    new_order.append(system)
+                    break
+
+        # Update the systems list
+        if len(new_order) == len(self.xdsm.systems):
+            self.xdsm.systems = new_order
+
+
+# Mapping from XDSM system styles to draganddrop element classes
+STYLE_MAP = {
+    'Optimization': dnd.Optimization,
+    'SubOptimization': dnd.SubOptimization,
+    'MDA': dnd.MDA,
+    'DOE': dnd.DOE,
+    'ImplicitFunction': dnd.ImplicitFunction,
+    'Function': dnd.Function,
+    'Group': dnd.Group,
+    'ImplicitGroup': dnd.ImplicitGroup,
+}
+
+
+def create_xdsm_element(system_node) -> dnd.XDSMElement:
+    """
+    Create a draganddrop XDSMElement from an XDSM SystemNode.
+
+    Parameters
+    ----------
+    system_node : SystemNode
+        The system node from the XDSM diagram
+
+    Returns
+    -------
+    XDSMElement
+        The corresponding draganddrop element
+    """
+    style_class = STYLE_MAP.get(system_node.style, dnd.Function)
+
+    # Get the label text
+    if isinstance(system_node.label, (list, tuple)):
+        title = ', '.join(system_node.label)
+    else:
+        title = system_node.label
+
+    return style_class(title=title)
+
+
+def build_disciplines_from_xdsm(xdsm: XDSM) -> list:
+    """
+    Build a list of discipline elements from an XDSM object.
+
+    Parameters
+    ----------
+    xdsm : XDSM
+        The XDSM diagram
+
+    Returns
+    -------
+    list
+        List of XDSMElement instances for the diagonal
+    """
+    return [create_xdsm_element(sys) for sys in xdsm.systems]
+
+
+def build_connection_matrix(xdsm: XDSM) -> dict:
+    """
+    Build a matrix of connections from the XDSM.
+
+    Parameters
+    ----------
+    xdsm : XDSM
+        The XDSM diagram
+
+    Returns
+    -------
+    dict
+        Dictionary mapping (row, col) tuples to connection labels
+    """
+    # Create a mapping from node_name to index
+    node_to_index = {sys.node_name: i for i, sys in enumerate(xdsm.systems)}
+
+    # Build the connection matrix
+    connection_matrix = {}
+    for conn in xdsm.connections:
+        src_idx = node_to_index.get(conn.src)
+        tgt_idx = node_to_index.get(conn.target)
+
+        if src_idx is not None and tgt_idx is not None:
+            # Get the label text
+            if isinstance(conn.label, (list, tuple)):
+                label_text = ', '.join(conn.label)
+            else:
+                label_text = conn.label
+
+            # Store as (row, col) -> label
+            # In XDSM, connection from src to target appears at position (src_row, target_col)
+            # Forward connections (src < target) appear in upper triangle
+            # Backward/feedback connections (src > target) appear in lower triangle
+            connection_matrix[(src_idx, tgt_idx)] = label_text
+
+    return connection_matrix
+
+
+# Create a sample XDSM with 4 systems
+sample_xdsm = XDSM()
+sample_xdsm.add_system('opt', 'Optimization', r'Optimization')
+sample_xdsm.add_system('d1', 'Function', r'Analysis 1')
+sample_xdsm.add_system('d2', 'Function', r'Analysis 2')
+sample_xdsm.add_system('d3', 'Function', r'Analysis 3')
+
+# Add connections between systems
+sample_xdsm.connect('d1', 'd2', r'y')  # Analysis 1 -> Analysis 2
+sample_xdsm.connect('d2', 'd3', r'z')  # Analysis 2 -> Analysis 3
+sample_xdsm.connect('d3', 'opt', r'f')  # Analysis 3 -> Optimization
 
 # Create a global GUI instance to hold the XDSM reference
-gui_instance = XDSMGUI()
+gui_instance = XDSMGUI(xdsm=sample_xdsm)
 
 # Create arrow canvas in a relatively positioned container
 with ui.element('div').classes('relative w-full h-screen'):
@@ -104,15 +262,23 @@ with ui.element('div').classes('relative w-full h-screen'):
 
     MainToolbar(gui_instance=gui_instance)
 
-    disciplines = [dnd.Optimization(), dnd.Function(title='Analysis 1'),
-                   dnd.Function(title='Analysis 2'), dnd.Function(title='Analysis 3')]
+    # Build disciplines and connections from the XDSM
+    disciplines = build_disciplines_from_xdsm(gui_instance.xdsm)
+    connections = build_connection_matrix(gui_instance.xdsm)
 
     def on_reorder(reordered_disciplines):
-        ui.notify(f'Disciplines reordered: {[d.title for d in reordered_disciplines]}')
+        """Handle reordering of disciplines in the GUI."""
+        # Update the XDSM object to match the new order
+        gui_instance.sync_from_disciplines(reordered_disciplines)
+
+        # Show notification with the new order
+        system_names = [sys.node_name for sys in gui_instance.xdsm.systems]
+        ui.notify(f'XDSM systems reordered: {system_names}')
 
     dnd.DragGrid(
         disciplines=disciplines,
         on_reorder=on_reorder,
+        connections=connections,
         columns=len(disciplines)
     ).classes('gap-x-1 gap-y-8')
 

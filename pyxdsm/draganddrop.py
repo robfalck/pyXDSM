@@ -285,18 +285,21 @@ class DragGrid(ui.grid):
     highlighted_index: Optional[int] = None
     preview_systems: list[Optional['System']] = []
 
-    def __init__(self, disciplines: list[XDSMElement], on_reorder: Optional[Callable] = None, **kwargs) -> None:
+    def __init__(self, disciplines: list[XDSMElement], on_reorder: Optional[Callable] = None,
+                 connections: Optional[dict] = None, **kwargs) -> None:
         """
         Initialize the DragGrid.
 
         Args:
             disciplines: List of XDSMElement instances for the diagonal
             on_reorder: Optional callback when disciplines are reordered
+            connections: Optional dictionary mapping (row, col) tuples to connection labels
             **kwargs: Additional arguments passed to ui.grid
         """
         super().__init__(**kwargs)
         self.disciplines = disciplines
         self.on_reorder_callback = on_reorder
+        self.connections = connections if connections is not None else {}
         self.system_cards: list[System] = []
         self.n = len(disciplines)
 
@@ -322,16 +325,16 @@ class DragGrid(ui.grid):
                         system.on('dragover.prevent', lambda e, idx=i: self.handle_dragover(e, idx))
                         system.on('drop', lambda e, idx=i: self.handle_drop(e, idx))
 
-                    elif j > i:
-                        # Upper triangle: outputs
-                        with ui.card().classes('w-40 h-40 flex items-center justify-center bg-blue-50'):
-                            ui.icon('arrow_forward', size='sm')
-                            ui.label(f'y{i}{j}').classes('text-xs')
                     else:
-                        # Lower triangle: inputs
-                        with ui.card().classes('w-40 h-40 flex items-center justify-center bg-yellow-50'):
-                            ui.icon('arrow_back', size='sm')
-                            ui.label(f'x{j}{i}').classes('text-xs')
+                        # Off-diagonal: check for connections
+                        conn_label = self.connections.get((i, j))
+                        if conn_label:
+                            # Connection exists - display it
+                            with ui.card().classes('w-40 h-40 flex items-center justify-center bg-green-50'):
+                                ui.label(conn_label).classes('text-sm font-semibold')
+                        else:
+                            # No connection - don't display anything (empty space)
+                            ui.label('').classes('w-40 h-40')
 
     def handle_dragover(self, _, target_index: int):
         """Handle dragover event on a diagonal system card."""
