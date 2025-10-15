@@ -240,6 +240,44 @@ def build_connection_matrix(xdsm: XDSM) -> dict:
     return connection_matrix
 
 
+def build_output_matrix(xdsm: XDSM) -> dict:
+    """
+    Build a matrix of outputs from the XDSM (right side outputs).
+
+    Parameters
+    ----------
+    xdsm : XDSM
+        The XDSM diagram
+
+    Returns
+    -------
+    dict
+        Dictionary mapping row index to list of output labels
+    """
+    # Create a mapping from node_name to index
+    node_to_index = {sys.node_name: i for i, sys in enumerate(xdsm.systems)}
+
+    # Build the output matrix - each row can have multiple outputs
+    output_matrix = {}
+    for sys_name, output_node in xdsm.outputs.items():
+        # Only process right-side outputs
+        if output_node.side == 'right':
+            sys_idx = node_to_index.get(sys_name)
+            if sys_idx is not None:
+                # Get the label text
+                if isinstance(output_node.label, (list, tuple)):
+                    label_text = ', '.join(output_node.label)
+                else:
+                    label_text = output_node.label
+
+                # Store outputs as row_idx -> list of labels
+                if sys_idx not in output_matrix:
+                    output_matrix[sys_idx] = []
+                output_matrix[sys_idx].append(label_text)
+
+    return output_matrix
+
+
 # Create a sample XDSM with 4 systems
 sample_xdsm = XDSM()
 sample_xdsm.add_system('opt', 'Optimization', r'Optimization')
@@ -252,6 +290,9 @@ sample_xdsm.connect('d1', 'd2', r'y')  # Analysis 1 -> Analysis 2
 sample_xdsm.connect('d2', 'd3', r'z')  # Analysis 2 -> Analysis 3
 sample_xdsm.connect('d3', 'opt', r'f')  # Analysis 3 -> Optimization
 
+# Add outputs for Analysis 1 (pass as list to include both)
+sample_xdsm.add_output('d1', [r'a', r'b'], side='right')  # Analysis 1 outputs 'a' and 'b'
+
 # Create a global GUI instance to hold the XDSM reference
 gui_instance = XDSMGUI(xdsm=sample_xdsm)
 
@@ -262,16 +303,21 @@ with ui.element('div').classes('relative w-full h-screen'):
 
     MainToolbar(gui_instance=gui_instance)
 
-    # Build disciplines and connections from the XDSM
+    # Build disciplines, connections, and outputs from the XDSM
     disciplines = build_disciplines_from_xdsm(gui_instance.xdsm)
     connections = build_connection_matrix(gui_instance.xdsm)
+    outputs = build_output_matrix(gui_instance.xdsm)
+
+    # Calculate number of columns: systems + output column (if there are outputs)
+    num_cols = len(disciplines) + (1 if outputs else 0)
 
     # Create the DragGrid and store reference
     xdsm_grid = dnd.DragGrid(
         disciplines=disciplines,
         on_reorder=None,  # Will set after defining the callback
         connections=connections,
-        columns=len(disciplines)
+        outputs=outputs,
+        columns=num_cols
     ).classes('gap-x-1 gap-y-8')
 
     def on_reorder(reordered_disciplines):
@@ -279,11 +325,12 @@ with ui.element('div').classes('relative w-full h-screen'):
         # Update the XDSM object to match the new order
         gui_instance.sync_from_disciplines(reordered_disciplines)
 
-        # Rebuild the connection matrix based on the new system order
+        # Rebuild the connection and output matrices based on the new system order
         new_connections = build_connection_matrix(gui_instance.xdsm)
+        new_outputs = build_output_matrix(gui_instance.xdsm)
 
-        # Update the grid with the new connections
-        xdsm_grid.update_connections(new_connections)
+        # Update the grid with the new connections and outputs
+        xdsm_grid.update_connections(new_connections, new_outputs)
 
         # Show notification with the new order
         system_names = [sys.node_name for sys in gui_instance.xdsm.systems]

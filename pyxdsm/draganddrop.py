@@ -241,6 +241,57 @@ class ImplicitFunction(XDSMElement):
         super().__init__(**data)
 
 
+class DataInter(XDSMElement):
+    """Data connection between components (internal)."""
+
+    def __init__(self, **data):
+        if 'title' not in data:
+            data['title'] = ''
+        if 'classes' not in data:
+            data['classes'] = 'w-40 h-20 flex items-center justify-center self-center'
+        if 'style' not in data:
+            # Light gray fill with parallelogram skew to match TikZ trapezium
+            # TikZ uses trapezium with left angle 75° and right angle 105°
+            # CSS skewX creates a parallelogram effect
+            data['style'] = 'background-color: rgba(0, 0, 0, 0.1); transform: skewX(-15deg); border: 1px solid rgba(0, 0, 0, 0.3);'
+        super().__init__(**data)
+
+
+class DataIO(XDSMElement):
+    """Data I/O connection (input/output)."""
+
+    def __init__(self, **data):
+        if 'title' not in data:
+            data['title'] = ''
+        if 'classes' not in data:
+            data['classes'] = 'w-40 h-20 flex items-center justify-center self-center'
+        if 'style' not in data:
+            # White fill with parallelogram skew to match TikZ trapezium
+            # TikZ uses trapezium with left angle 75° and right angle 105°
+            data['style'] = 'background-color: white; transform: skewX(-15deg); border: 1px solid rgba(0, 0, 0, 0.3);'
+        super().__init__(**data)
+
+
+class Connection(ui.card):
+    """Display card for connections between systems."""
+
+    def __init__(self, xdsm_element: XDSMElement) -> None:
+        super().__init__()
+        self.xdsm_element = xdsm_element
+
+        # Apply styling from XDSMElement
+        if xdsm_element.classes:
+            self.classes(xdsm_element.classes)
+
+        # Apply inline styles from XDSMElement
+        if xdsm_element.style:
+            self.style(xdsm_element.style)
+
+        # Add the label with counter-skew to keep text readable
+        with self:
+            ui.label(xdsm_element.title).classes('text-center text-sm font-semibold').style('transform: skewX(15deg);')
+
+
 class System(ui.card):
 
     dragged: Optional['System'] = None
@@ -286,7 +337,7 @@ class DragGrid(ui.grid):
     preview_systems: list[Optional['System']] = []
 
     def __init__(self, disciplines: list[XDSMElement], on_reorder: Optional[Callable] = None,
-                 connections: Optional[dict] = None, **kwargs) -> None:
+                 connections: Optional[dict] = None, outputs: Optional[dict] = None, **kwargs) -> None:
         """
         Initialize the DragGrid.
 
@@ -294,26 +345,35 @@ class DragGrid(ui.grid):
             disciplines: List of XDSMElement instances for the diagonal
             on_reorder: Optional callback when disciplines are reordered
             connections: Optional dictionary mapping (row, col) tuples to connection labels
+            outputs: Optional dictionary mapping row index to list of output labels
             **kwargs: Additional arguments passed to ui.grid
         """
         super().__init__(**kwargs)
         self.disciplines = disciplines
         self.on_reorder_callback = on_reorder
         self.connections = connections if connections is not None else {}
+        self.outputs = outputs if outputs is not None else {}
         self.system_cards: list[System] = []
         self.n = len(disciplines)
+
+        # Check if we need an output column
+        self.has_outputs = len(self.outputs) > 0
 
         # Set up drop zones on each diagonal cell
         self.render()
 
-    def update_connections(self, connections: dict):
+    def update_connections(self, connections: dict, outputs: Optional[dict] = None):
         """
-        Update the connection matrix and re-render the grid.
+        Update the connection matrix and optionally outputs, then re-render the grid.
 
         Args:
             connections: New dictionary mapping (row, col) tuples to connection labels
+            outputs: Optional dictionary mapping row index to list of output labels
         """
         self.connections = connections
+        if outputs is not None:
+            self.outputs = outputs
+            self.has_outputs = len(self.outputs) > 0
         self.render()
 
     def render(self):
@@ -323,28 +383,43 @@ class DragGrid(ui.grid):
         self.system_cards.clear()
         DragGrid.preview_systems.clear()
 
+        # Determine the number of columns: n systems + 1 output column (if needed)
+        num_cols = self.n + (1 if self.has_outputs else 0)
+
         with self:
             for i in range(self.n):
-                for j in range(self.n):
-                    if i == j:
-                        # Diagonal: discipline boxes
-                        system = System(self.disciplines[i])
-                        self.system_cards.append(system)
+                for j in range(num_cols):
+                    if j < self.n:
+                        # Within the main n x n grid
+                        if i == j:
+                            # Diagonal: discipline boxes
+                            system = System(self.disciplines[i])
+                            self.system_cards.append(system)
 
-                        # Add drop zone behavior to the system card
-                        system.on('dragover.prevent', lambda e, idx=i: self.handle_dragover(e, idx))
-                        system.on('drop', lambda e, idx=i: self.handle_drop(e, idx))
+                            # Add drop zone behavior to the system card
+                            system.on('dragover.prevent', lambda e, idx=i: self.handle_dragover(e, idx))
+                            system.on('drop', lambda e, idx=i: self.handle_drop(e, idx))
 
-                    else:
-                        # Off-diagonal: check for connections
-                        conn_label = self.connections.get((i, j))
-                        if conn_label:
-                            # Connection exists - display it
-                            with ui.card().classes('w-40 h-40 flex items-center justify-center bg-green-50'):
-                                ui.label(conn_label).classes('text-sm font-semibold')
                         else:
-                            # No connection - don't display anything (empty space)
-                            ui.label('').classes('w-40 h-40')
+                            # Off-diagonal: check for connections
+                            conn_label = self.connections.get((i, j))
+                            if conn_label:
+                                # Connection exists - display it using DataInter style
+                                Connection(DataInter(title=conn_label))
+                            else:
+                                # No connection - don't display anything (empty space)
+                                ui.label('').classes('w-40 h-20')
+                    else:
+                        # Output column (rightmost column)
+                        outputs_for_row = self.outputs.get(i, [])
+                        if outputs_for_row:
+                            # Display outputs using DataIO style
+                            # For multiple outputs, show them comma-separated
+                            output_label = ', '.join(outputs_for_row)
+                            Connection(DataIO(title=output_label))
+                        else:
+                            # No output for this row
+                            ui.label('').classes('w-40 h-20')
 
     def handle_dragover(self, _, target_index: int):
         """Handle dragover event on a diagonal system card."""
