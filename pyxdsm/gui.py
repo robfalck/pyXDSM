@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 from dataclasses import dataclass
-import draganddrop as dnd
+from typing import Optional
+import pyxdsm.draganddrop as dnd
 from nicegui import ui
+from pyxdsm.XDSM import XDSM
 
 ui.add_head_html('''
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.0/dist/katex.min.css">
@@ -21,8 +23,9 @@ def handle_drop(todo: ToDo, location: str):
 
 
 class MainToolbar(ui.row):
-    def __init__(self):
+    def __init__(self, gui_instance):
         super().__init__()
+        self.gui = gui_instance
         self.classes('bg-zinc-200')
 
         with self:
@@ -46,34 +49,72 @@ class MainToolbar(ui.row):
             self.switch.text = 'Unlocked'
 
 
+class XDSMGUI:
+    """
+    GUI for visualizing and editing XDSM diagrams.
+
+    Attributes
+    ----------
+    xdsm : XDSM
+        Reference to the XDSM diagram being displayed/edited
+    """
+
+    def __init__(self, xdsm: Optional[XDSM] = None):
+        """
+        Initialize the XDSM GUI.
+
+        Parameters
+        ----------
+        xdsm : XDSM, optional
+            The XDSM diagram to display and edit. If None, starts with an empty diagram.
+        """
+        self.xdsm = xdsm if xdsm is not None else XDSM()
+
+    def set_xdsm(self, xdsm: XDSM):
+        """
+        Set a new XDSM diagram to display.
+
+        Parameters
+        ----------
+        xdsm : XDSM
+            The XDSM diagram to display
+        """
+        self.xdsm = xdsm
+        # TODO: Refresh the UI to display the new XDSM
+
+    def get_xdsm(self) -> XDSM:
+        """
+        Get the current XDSM diagram.
+
+        Returns
+        -------
+        XDSM
+            The current XDSM diagram
+        """
+        return self.xdsm
+
+
+# Create a global GUI instance to hold the XDSM reference
+gui_instance = XDSMGUI()
+
 # Create arrow canvas in a relatively positioned container
 with ui.element('div').classes('relative w-full h-screen'):
     # Create the arrow canvas
     # arrows = dnd.arrow_canvas()
 
-    MainToolbar()
-
+    MainToolbar(gui_instance=gui_instance)
 
     disciplines = [dnd.Optimization(), dnd.Function(title='Analysis 1'),
                    dnd.Function(title='Analysis 2'), dnd.Function(title='Analysis 3')]
-    n = len(disciplines)
 
-    with dnd.DragGrid(columns=n).classes('gap-x-1 gap-y-8'):
-        for i in range(n):
-            for j in range(n):
-                if i == j:
-                    # Diagonal: discipline boxes
-                    dnd.System(disciplines[i])
-                elif j > i:
-                    # Upper triangle: outputs
-                    with ui.card().classes('w-40 h-40 flex items-center justify-center bg-blue-50'):
-                        ui.icon('arrow_forward', size='sm')
-                        ui.label(f'y{i}{j}').classes('text-xs')
-                else:
-                    # Lower triangle: inputs
-                    with ui.card().classes('w-40 h-40 flex items-center justify-center bg-yellow-50'):
-                        ui.icon('arrow_back', size='sm')
-                        ui.label(f'x{j}{i}').classes('text-xs')
+    def on_reorder(reordered_disciplines):
+        ui.notify(f'Disciplines reordered: {[d.title for d in reordered_disciplines]}')
+
+    dnd.DragGrid(
+        disciplines=disciplines,
+        on_reorder=on_reorder,
+        columns=len(disciplines)
+    ).classes('gap-x-1 gap-y-8')
 
 
     # with ui.row():
@@ -89,8 +130,8 @@ with ui.element('div').classes('relative w-full h-screen'):
     #         dnd.card(ToDo('Release Native-Mode'))
 
     # systems = [(ToDo('Optimizer'), {'shape': 'pill'}),
-    #            (ToDo('Newton'), {'shape': 'pill'}), 
-    #            (ToDo('f'), {'shape': 'rectangle'}), 
+    #            (ToDo('Newton'), {'shape': 'pill'}),
+    #            (ToDo('f'), {'shape': 'rectangle'}),
     #            (ToDo('g'), {'shape': 'rectangle'})]
 
     # n = 4

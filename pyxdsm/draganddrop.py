@@ -280,87 +280,160 @@ class System(ui.card):
 
 
 class DragGrid(ui.grid):
+    """XDSM grid that supports drag-and-drop reordering of diagonal systems."""
 
-    def __init__(self, on_drop: Optional[Callable] = None, **kwargs) -> None:
+    highlighted_index: Optional[int] = None
+    preview_systems: list[Optional['System']] = []
+
+    def __init__(self, disciplines: list[XDSMElement], on_reorder: Optional[Callable] = None, **kwargs) -> None:
+        """
+        Initialize the DragGrid.
+
+        Args:
+            disciplines: List of XDSMElement instances for the diagonal
+            on_reorder: Optional callback when disciplines are reordered
+            **kwargs: Additional arguments passed to ui.grid
+        """
         super().__init__(**kwargs)
-        # self.title = title
-        self.on_drop_callback = on_drop
-        # self.classes('bg-blue-grey-2 w-60 p-4 rounded shadow-2')
+        self.disciplines = disciplines
+        self.on_reorder_callback = on_reorder
+        self.system_cards: list[System] = []
+        self.n = len(disciplines)
 
-        # ui.label(title).classes('text-bold text-grey-8')
+        # Set up drop zones on each diagonal cell
+        self.render()
+
+    def render(self):
+        """Render the XDSM grid with disciplines on diagonal and data off-diagonal."""
+        # Clear existing content
+        self.clear()
+        self.system_cards.clear()
+        DragGrid.preview_systems.clear()
+
+        with self:
+            for i in range(self.n):
+                for j in range(self.n):
+                    if i == j:
+                        # Diagonal: discipline boxes
+                        system = System(self.disciplines[i])
+                        self.system_cards.append(system)
+
+                        # Add drop zone behavior to the system card
+                        system.on('dragover.prevent', lambda e, idx=i: self.handle_dragover(e, idx))
+                        system.on('drop', lambda e, idx=i: self.handle_drop(e, idx))
+
+                    elif j > i:
+                        # Upper triangle: outputs
+                        with ui.card().classes('w-40 h-40 flex items-center justify-center bg-blue-50'):
+                            ui.icon('arrow_forward', size='sm')
+                            ui.label(f'y{i}{j}').classes('text-xs')
+                    else:
+                        # Lower triangle: inputs
+                        with ui.card().classes('w-40 h-40 flex items-center justify-center bg-yellow-50'):
+                            ui.icon('arrow_back', size='sm')
+                            ui.label(f'x{j}{i}').classes('text-xs')
+
+    def handle_dragover(self, _, target_index: int):
+        """Handle dragover event on a diagonal system card."""
+        if not System.dragged:
+            return
+
+        # Find the source index
+        source_index = None
+        for idx, card in enumerate(self.system_cards):
+            if card == System.dragged:
+                source_index = idx
+                break
+
+        if source_index is None or source_index == target_index:
+            return
+
+        # Show preview of reordering
+        if DragGrid.highlighted_index != target_index:
+            DragGrid.highlighted_index = target_index
+            self._show_preview(target_index)
+
+    def handle_drop(self, _, target_index: int):
+        """Handle drop event - reorder the disciplines."""
+        if not System.dragged:
+            return
+
+        # Find the source index
+        source_index = None
+        for idx, card in enumerate(self.system_cards):
+            if card == System.dragged:
+                source_index = idx
+                break
+
+        if source_index is None or source_index == target_index:
+            self._clear_preview()
+            return
+
+        # Reorder disciplines
+        discipline = self.disciplines.pop(source_index)
+        self.disciplines.insert(target_index, discipline)
+
+        # Clear preview and re-render
+        self._clear_preview()
+        DragGrid.highlighted_index = None
+        self.render()
+
+        # Call callback if provided
+        if self.on_reorder_callback:
+            self.on_reorder_callback(self.disciplines)
+
+    def _show_preview(self, target_index: int):
+        """Show semi-transparent preview of where systems will move."""
+        # Clear existing previews
+        self._clear_preview()
+
+        # Add semi-transparent overlay to target position
+        self.system_cards[target_index].classes(add='ring-4 ring-blue-400')
+
+    def _clear_preview(self):
+        """Clear all preview highlights."""
+        for card in self.system_cards:
+            card.classes(remove='ring-4 ring-blue-400')
+
+
+# class column(ui.column):
+#     highlighted: Optional[column] = None
+
+#     def __init__(self, title: str, *, on_drop: Optional[Callable] = None) -> None:
+#         super().__init__()
+#         self.title = title
+#         self.on_drop_callback = on_drop
+#         self.classes('bg-blue-grey-2 w-60 p-4 rounded shadow-2')
+
+#         ui.label(title).classes('text-bold text-grey-8')
         
-        # Set up drop zone
-        self.on('dragover.prevent', self.handle_dragover)
-        self.on('dragleave', self.handle_dragleave)
-        self.on('drop', self.handle_drop)
-
-    def handle_dragover(self, _):
-        pass
-        # if column.highlighted != self:
-        #     if column.highlighted:
-        #         column.highlighted.classes(remove='bg-blue-grey-3')
-        #     self.classes(add='bg-blue-grey-3')
-        #     column.highlighted = self
+#         # Set up drop zone
+#         self.on('dragover.prevent', self.handle_dragover)
+#         self.on('dragleave', self.handle_dragleave)
+#         self.on('drop', self.handle_drop)
     
-    def handle_dragleave(self, _):
-        pass  # Keep highlight until drop or dragend
+#     def handle_dragover(self, _):
+#         if column.highlighted != self:
+#             if column.highlighted:
+#                 column.highlighted.classes(remove='bg-blue-grey-3')
+#             self.classes(add='bg-blue-grey-3')
+#             column.highlighted = self
     
-    def handle_drop(self, _):
-        pass
-        # if card.dragged and card.dragged.parent_slot != self.default_slot:
-        #     # Move card to new column
-        #     card.dragged.move(self)
-
-        #     # Call the drop callback
-        #     if self.on_drop_callback:
-        #         # Get column name from the stored title
-        #         col_name = self.title
-        #         self.on_drop_callback(card.dragged.item, col_name)
-
-        # # Remove highlight
-        # if column.highlighted:
-        #     column.highlighted.classes(remove='bg-blue-grey-3')
-        #     column.highlighted = None
-
-
-class column(ui.column):
-    highlighted: Optional[column] = None
-
-    def __init__(self, title: str, *, on_drop: Optional[Callable] = None) -> None:
-        super().__init__()
-        self.title = title
-        self.on_drop_callback = on_drop
-        self.classes('bg-blue-grey-2 w-60 p-4 rounded shadow-2')
-
-        ui.label(title).classes('text-bold text-grey-8')
-        
-        # Set up drop zone
-        self.on('dragover.prevent', self.handle_dragover)
-        self.on('dragleave', self.handle_dragleave)
-        self.on('drop', self.handle_drop)
+#     def handle_dragleave(self, _):
+#         pass  # Keep highlight until drop or dragend
     
-    def handle_dragover(self, _):
-        if column.highlighted != self:
-            if column.highlighted:
-                column.highlighted.classes(remove='bg-blue-grey-3')
-            self.classes(add='bg-blue-grey-3')
-            column.highlighted = self
-    
-    def handle_dragleave(self, _):
-        pass  # Keep highlight until drop or dragend
-    
-    def handle_drop(self, _):
-        if card.dragged and card.dragged.parent_slot != self.default_slot:
-            # Move card to new column
-            card.dragged.move(self)
+#     def handle_drop(self, _):
+#         if card.dragged and card.dragged.parent_slot != self.default_slot:
+#             # Move card to new column
+#             card.dragged.move(self)
 
-            # Call the drop callback
-            if self.on_drop_callback:
-                # Get column name from the stored title
-                col_name = self.title
-                self.on_drop_callback(card.dragged.item, col_name)
+#             # Call the drop callback
+#             if self.on_drop_callback:
+#                 # Get column name from the stored title
+#                 col_name = self.title
+#                 self.on_drop_callback(card.dragged.item, col_name)
 
-        # Remove highlight
-        if column.highlighted:
-            column.highlighted.classes(remove='bg-blue-grey-3')
-            column.highlighted = None
+#         # Remove highlight
+#         if column.highlighted:
+#             column.highlighted.classes(remove='bg-blue-grey-3')
+#             column.highlighted = None
