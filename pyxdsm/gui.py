@@ -32,12 +32,41 @@ class MainToolbar(ui.row):
             ui.button('New', on_click=lambda: ui.notify('New Model Requested'))
 
             with ui.dropdown_button('Export', auto_close=True):
-                ui.item('PDF', on_click=lambda: ui.notify('Exporting to PDF'))
+                ui.item('PDF', on_click=self._export_pdf)
                 ui.item('JSON', on_click=lambda: ui.notify('Exporting to JSON'))
 
             self.lock_icon = ui.icon('lock_open', size='md')
             self.switch = ui.switch('Unlocked')
             self.switch.on_value_change(self._on_toggle)
+
+    def _export_pdf(self):
+        """Export the XDSM diagram to PDF."""
+        try:
+            import tempfile
+            import os
+
+            # Create a temporary directory for the output
+            with tempfile.TemporaryDirectory() as tmpdir:
+                file_name = 'xdsm_diagram'
+
+                # Call XDSM.write() to generate the PDF in the temp directory
+                # The outdir parameter specifies where to put the output files
+                self.gui.xdsm.write(file_name, build=True, cleanup=True, quiet=True, outdir=tmpdir)
+
+                # The PDF will be at tmpdir/xdsm_diagram.pdf
+                pdf_path = os.path.join(tmpdir, file_name + '.pdf')
+
+                if os.path.exists(pdf_path):
+                    with open(pdf_path, 'rb') as f:
+                        pdf_data = f.read()
+
+                    # Trigger download in the browser
+                    ui.download(pdf_data, 'xdsm_diagram.pdf')
+                    ui.notify('PDF exported successfully!')
+                else:
+                    ui.notify(f'Error: PDF file not generated at {pdf_path}', type='negative')
+        except Exception as e:
+            ui.notify(f'Error exporting PDF: {str(e)}', type='negative')
 
     def _on_toggle(self, e):
         ui.notify(e.value)
@@ -231,6 +260,10 @@ def build_connection_matrix(xdsm: XDSM) -> dict:
             else:
                 label_text = conn.label
 
+            # Wrap in $ for KaTeX rendering if it contains LaTeX commands
+            if '\\' in label_text and not label_text.startswith('$'):
+                label_text = f'${label_text}$'
+
             # Store as (row, col) -> label
             # In XDSM, connection from src to target appears at position (src_row, target_col)
             # Forward connections (src < target) appear in upper triangle
@@ -324,12 +357,14 @@ sample_xdsm.add_system('d3', 'Function', r'Analysis 3')
 
 # Add connections between systems
 sample_xdsm.connect('opt', 'd1', r'x')  # Optimization -> Analysis 1
+sample_xdsm.connect('opt', 'newton', r'x')  # Optimization -> Newton
 sample_xdsm.connect('opt', 'd2', r'x')  # Optimization -> Analysis 2
+sample_xdsm.connect('d1', 'newton', r'y')  # Analysis 1 -> Newton
 sample_xdsm.connect('d1', 'd2', r'y')  # Analysis 1 -> Analysis 2
-sample_xdsm.connect('newton', 'd2', r'$\theta$')  # Newton -> Analysis 2
-sample_xdsm.connect('newton', 'd3', r'$\theta$')  # Newton -> Analysis 3
+sample_xdsm.connect('newton', 'd2', r'\theta')  # Newton -> Analysis 2
+sample_xdsm.connect('newton', 'd3', r'\theta')  # Newton -> Analysis 3
 sample_xdsm.connect('d2', 'd3', r'z')  # Analysis 2 -> Analysis 3
-sample_xdsm.connect('d3', 'newton', r'$\mathcal{R}(\theta)$')  # Analysis 3 -> Newton (feedback)
+sample_xdsm.connect('d3', 'newton', r'\mathcal{R}(\theta)')  # Analysis 3 -> Newton (feedback)
 sample_xdsm.connect('d3', 'opt', r'f')  # Analysis 3 -> Optimization (feedback)
 
 # Add outputs for Analysis 1 (pass as list to include both)
