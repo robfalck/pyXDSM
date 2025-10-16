@@ -79,7 +79,7 @@ class ConnectionCanvas(ui.html):
                 const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
                 const d1 = `M ${x1} ${y1} L ${x2} ${y1}`;
                 path1.setAttribute('d', d1);
-                path1.setAttribute('stroke', 'rgba(0, 0, 0, 0.4)'); // black!40
+                path1.setAttribute('stroke', 'rgb(153, 153, 153)'); // black!40 as solid gray
                 path1.setAttribute('stroke-width', '5');
                 path1.setAttribute('stroke-linecap', 'butt');
                 path1.setAttribute('fill', 'none');
@@ -89,7 +89,7 @@ class ConnectionCanvas(ui.html):
                 const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
                 const d2 = `M ${x3} ${y3} L ${x4} ${y4}`;
                 path2.setAttribute('d', d2);
-                path2.setAttribute('stroke', 'rgba(0, 0, 0, 0.4)'); // black!40
+                path2.setAttribute('stroke', 'rgb(153, 153, 153)'); // black!40 as solid gray
                 path2.setAttribute('stroke-width', '5');
                 path2.setAttribute('stroke-linecap', 'butt');
                 path2.setAttribute('fill', 'none');
@@ -116,7 +116,7 @@ class ConnectionCanvas(ui.html):
                 const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
                 const d1 = `M ${x1} ${y1} L ${x2} ${y1}`;
                 path1.setAttribute('d', d1);
-                path1.setAttribute('stroke', 'rgba(0, 0, 0, 0.4)'); // black!40
+                path1.setAttribute('stroke', 'rgb(153, 153, 153)'); // black!40 as solid gray
                 path1.setAttribute('stroke-width', '5');
                 path1.setAttribute('stroke-linecap', 'butt');
                 path1.setAttribute('fill', 'none');
@@ -126,7 +126,7 @@ class ConnectionCanvas(ui.html):
                 const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
                 const d2 = `M ${x3} ${y3} L ${x4} ${y4}`;
                 path2.setAttribute('d', d2);
-                path2.setAttribute('stroke', 'rgba(0, 0, 0, 0.4)'); // black!40
+                path2.setAttribute('stroke', 'rgb(153, 153, 153)'); // black!40 as solid gray
                 path2.setAttribute('stroke-width', '5');
                 path2.setAttribute('stroke-linecap', 'butt');
                 path2.setAttribute('fill', 'none');
@@ -387,7 +387,8 @@ class DataInter(XDSMElement):
             # Light gray fill with parallelogram skew to match TikZ trapezium
             # TikZ uses trapezium with left angle 75° and right angle 105°
             # CSS skewX creates a parallelogram effect
-            data['style'] = 'background-color: rgba(0, 0, 0, 0.1); transform: skewX(-15deg); border: 1px solid rgba(0, 0, 0, 0.3);'
+            # Use solid background to hide connection lines behind it
+            data['style'] = 'background-color: rgb(230, 230, 230); transform: skewX(-15deg); border: 1px solid rgba(0, 0, 0, 0.3);'
         super().__init__(**data)
 
 

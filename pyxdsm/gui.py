@@ -322,9 +322,11 @@ sample_xdsm.add_system('d2', 'Function', r'Analysis 2')
 sample_xdsm.add_system('d3', 'Function', r'Analysis 3')
 
 # Add connections between systems
+sample_xdsm.connect('opt', 'd1', r'x')  # Optimization -> Analysis 1
+sample_xdsm.connect('opt', 'd2', r'x')  # Optimization -> Analysis 2
 sample_xdsm.connect('d1', 'd2', r'y')  # Analysis 1 -> Analysis 2
 sample_xdsm.connect('d2', 'd3', r'z')  # Analysis 2 -> Analysis 3
-sample_xdsm.connect('d3', 'opt', r'f')  # Analysis 3 -> Optimization
+sample_xdsm.connect('d3', 'opt', r'f')  # Analysis 3 -> Optimization (feedback)
 
 # Add outputs for Analysis 1 (pass as list to include both)
 sample_xdsm.add_output('d1', [r'a', r'b'], side='right')  # Analysis 1 outputs 'a' and 'b'
