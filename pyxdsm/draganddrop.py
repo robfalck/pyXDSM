@@ -26,10 +26,39 @@ class ConnectionCanvas(ui.html):
             is_feedback: True if this is a feedback connection (backward), False if forward
         """
         self.connections.append({
+            'type': 'inter',
             'source': source_id,
             'target': target_id,
             'data': data_id,
             'feedback': is_feedback
+        })
+
+    def add_input_connection(self, target_id: str, data_id: str):
+        """
+        Add an input connection (from top DataIO to system).
+
+        Args:
+            target_id: ID of target system element
+            data_id: ID of the DataIO element
+        """
+        self.connections.append({
+            'type': 'input',
+            'target': target_id,
+            'data': data_id
+        })
+
+    def add_output_connection(self, source_id: str, data_id: str):
+        """
+        Add an output connection (from system to right DataIO).
+
+        Args:
+            source_id: ID of source system element
+            data_id: ID of the DataIO element
+        """
+        self.connections.append({
+            'type': 'output',
+            'source': source_id,
+            'data': data_id
         })
 
     def draw_connections(self):
@@ -46,16 +75,61 @@ class ConnectionCanvas(ui.html):
         const connections = %s;
 
         connections.forEach(conn => {
-            const sourceEl = document.getElementById(conn.source);
-            const targetEl = document.getElementById(conn.target);
             const dataEl = document.getElementById(conn.data);
+            if (!dataEl) return;
 
-            if (!sourceEl || !targetEl || !dataEl) return;
-
-            const sourceRect = sourceEl.getBoundingClientRect();
-            const targetRect = targetEl.getBoundingClientRect();
             const dataRect = dataEl.getBoundingClientRect();
             const svgRect = svg.getBoundingClientRect();
+
+            if (conn.type === 'input') {
+                // Input connection: bottom of DataIO -> top of target system
+                const targetEl = document.getElementById(conn.target);
+                if (!targetEl) return;
+
+                const targetRect = targetEl.getBoundingClientRect();
+
+                const x1 = dataRect.left + dataRect.width / 2 - svgRect.left;
+                const y1 = dataRect.bottom - svgRect.top;
+                const x2 = targetRect.left + targetRect.width / 2 - svgRect.left;
+                const y2 = targetRect.top - svgRect.top;
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const d = `M ${x1} ${y1} L ${x2} ${y2}`;
+                path.setAttribute('d', d);
+                path.setAttribute('stroke', 'rgb(153, 153, 153)');
+                path.setAttribute('stroke-width', '5');
+                path.setAttribute('stroke-linecap', 'butt');
+                path.setAttribute('fill', 'none');
+                svg.appendChild(path);
+            } else if (conn.type === 'output') {
+                // Output connection: right of source system -> left of DataIO
+                const sourceEl = document.getElementById(conn.source);
+                if (!sourceEl) return;
+
+                const sourceRect = sourceEl.getBoundingClientRect();
+
+                const x1 = sourceRect.right - svgRect.left;
+                const y1 = sourceRect.top + sourceRect.height / 2 - svgRect.top;
+                const x2 = dataRect.left - svgRect.left;
+                const y2 = dataRect.top + dataRect.height / 2 - svgRect.top;
+
+                const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const d = `M ${x1} ${y1} L ${x2} ${y1}`;
+                path.setAttribute('d', d);
+                path.setAttribute('stroke', 'rgb(153, 153, 153)');
+                path.setAttribute('stroke-width', '5');
+                path.setAttribute('stroke-linecap', 'butt');
+                path.setAttribute('fill', 'none');
+                svg.appendChild(path);
+            } else {
+                // Inter-system connection (existing logic)
+                const sourceEl = document.getElementById(conn.source);
+                const targetEl = document.getElementById(conn.target);
+
+                if (!sourceEl || !targetEl) return;
+
+                const sourceRect = sourceEl.getBoundingClientRect();
+                const targetRect = targetEl.getBoundingClientRect();
 
             if (conn.feedback) {
                 // Feedback connection: left of source -> horizontal -> right of data (hide diagonal) -> vertical -> top of data -> vertical -> bottom of target
@@ -131,6 +205,7 @@ class ConnectionCanvas(ui.html):
                 path2.setAttribute('stroke-linecap', 'butt');
                 path2.setAttribute('fill', 'none');
                 svg.appendChild(path2);
+            }
             }
         });
         ''' % str(self.connections).replace("'", '"').replace('True', 'true').replace('False', 'false')
@@ -428,7 +503,8 @@ class Connection(ui.card):
 
         # Add the label with counter-skew to keep text readable
         with self:
-            ui.label(xdsm_element.title).classes('text-center text-xs font-semibold').style('transform: skewX(15deg);')
+            # Use HTML to render LaTeX with KaTeX
+            ui.html(f'<div class="text-center text-xs font-semibold katex-content" style="transform: skewX(15deg);">{xdsm_element.title}</div>', sanitize=False)
 
 
 class System(ui.card):
@@ -454,7 +530,8 @@ class System(ui.card):
             self.style(xdsm_element.style)
 
         with self:
-            ui.label(xdsm_element.title).classes('text-center')
+            # Use HTML to render LaTeX with KaTeX
+            ui.html(f'<div class="text-center font-bold katex-content">{xdsm_element.title}</div>', sanitize=False)
 
         # Make card draggable
         self.props('draggable')
@@ -498,6 +575,8 @@ class DragGrid(ui.grid):
         self.inputs = inputs if inputs is not None else {}
         self.system_cards: list[System] = []
         self.connection_cards: dict[tuple[int, int], Connection] = {}  # Track connection cards by (row, col)
+        self.input_cards: dict[int, Connection] = {}  # Track input cards by column index
+        self.output_cards: dict[int, Connection] = {}  # Track output cards by row index
         self.canvas = canvas
         self.n = len(disciplines)
 
@@ -533,6 +612,8 @@ class DragGrid(ui.grid):
         self.clear()
         self.system_cards.clear()
         self.connection_cards.clear()
+        self.input_cards.clear()
+        self.output_cards.clear()
         DragGrid.preview_systems.clear()
 
         # Clear canvas connections if we have a canvas
@@ -560,8 +641,10 @@ class DragGrid(ui.grid):
                             if inputs_for_col:
                                 # Display inputs using DataIO style
                                 input_label = ', '.join(inputs_for_col)
+                                input_id = f'input_{j}'
                                 with ui.element('div').classes('w-40 h-20 flex items-center justify-center'):
-                                    Connection(DataIO(title=input_label))
+                                    input_card = Connection(DataIO(title=input_label), connection_id=input_id)
+                                    self.input_cards[j] = input_card
                             else:
                                 # No input for this column
                                 ui.label('').classes('w-40 h-20')
@@ -607,8 +690,10 @@ class DragGrid(ui.grid):
                                 # Display outputs using DataIO style
                                 # For multiple outputs, show them comma-separated
                                 output_label = ', '.join(outputs_for_row)
+                                output_id = f'output_{sys_row}'
                                 with ui.element('div').classes('w-40 h-20 flex items-center justify-center'):
-                                    Connection(DataIO(title=output_label))
+                                    output_card = Connection(DataIO(title=output_label), connection_id=output_id)
+                                    self.output_cards[sys_row] = output_card
                             else:
                                 # No output for this row
                                 ui.label('').classes('w-40 h-20')
@@ -620,9 +705,38 @@ class DragGrid(ui.grid):
                 target_id = f'card_{id(self.system_cards[col])}'
                 self.canvas.add_connection(source_id, target_id, conn_id, is_feedback)
 
+        # Register input connections (from DataIO to systems)
+        if self.canvas:
+            for col_idx, input_card in self.input_cards.items():
+                target_id = f'card_{id(self.system_cards[col_idx])}'
+                input_id = f'input_{col_idx}'
+                self.canvas.add_input_connection(target_id, input_id)
+
+        # Register output connections (from systems to DataIO)
+        if self.canvas:
+            for row_idx, output_card in self.output_cards.items():
+                source_id = f'card_{id(self.system_cards[row_idx])}'
+                output_id = f'output_{row_idx}'
+                self.canvas.add_output_connection(source_id, output_id)
+
         # Draw connections after rendering is complete
         if self.canvas:
             ui.timer(0.1, self.canvas.draw_connections, once=True)
+
+        # Render all LaTeX expressions using KaTeX
+        ui.timer(0.15, lambda: ui.run_javascript('''
+            document.querySelectorAll('.katex-content').forEach(el => {
+                if (window.renderMathInElement) {
+                    renderMathInElement(el, {
+                        delimiters: [
+                            {left: '$$', right: '$$', display: true},
+                            {left: '$', right: '$', display: false}
+                        ],
+                        throwOnError: false
+                    });
+                }
+            });
+        '''), once=True)
 
     def handle_dragover(self, _, target_index: int):
         """Handle dragover event on a diagonal system card."""

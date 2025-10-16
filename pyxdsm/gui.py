@@ -314,10 +314,11 @@ def build_input_matrix(xdsm: XDSM) -> dict:
     return input_matrix
 
 
-# Create a sample XDSM with 4 systems
+# Create a sample XDSM with 5 systems
 sample_xdsm = XDSM()
 sample_xdsm.add_system('opt', 'Optimization', r'Optimization')
 sample_xdsm.add_system('d1', 'Function', r'Analysis 1')
+sample_xdsm.add_system('newton', 'MDA', r'Newton')
 sample_xdsm.add_system('d2', 'Function', r'Analysis 2')
 sample_xdsm.add_system('d3', 'Function', r'Analysis 3')
 
@@ -325,7 +326,10 @@ sample_xdsm.add_system('d3', 'Function', r'Analysis 3')
 sample_xdsm.connect('opt', 'd1', r'x')  # Optimization -> Analysis 1
 sample_xdsm.connect('opt', 'd2', r'x')  # Optimization -> Analysis 2
 sample_xdsm.connect('d1', 'd2', r'y')  # Analysis 1 -> Analysis 2
+sample_xdsm.connect('newton', 'd2', r'$\theta$')  # Newton -> Analysis 2
+sample_xdsm.connect('newton', 'd3', r'$\theta$')  # Newton -> Analysis 3
 sample_xdsm.connect('d2', 'd3', r'z')  # Analysis 2 -> Analysis 3
+sample_xdsm.connect('d3', 'newton', r'$\mathcal{R}(\theta)$')  # Analysis 3 -> Newton (feedback)
 sample_xdsm.connect('d3', 'opt', r'f')  # Analysis 3 -> Optimization (feedback)
 
 # Add outputs for Analysis 1 (pass as list to include both)
