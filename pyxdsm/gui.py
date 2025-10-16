@@ -342,31 +342,37 @@ sample_xdsm.add_input('d2', [r'p', r'q'])  # Analysis 2 inputs 'p' and 'q'
 gui_instance = XDSMGUI(xdsm=sample_xdsm)
 
 # Create arrow canvas in a relatively positioned container
-with ui.element('div').classes('relative w-full h-screen'):
+with ui.element('div').classes('w-full h-screen flex flex-col'):
     MainToolbar(gui_instance=gui_instance)
 
-    # Create the connection canvas for drawing lines
-    connection_canvas = dnd.ConnectionCanvas()
+    # Scrollable container for the XDSM diagram
+    with ui.element('div').classes('relative flex-1 overflow-auto'):
+        # Create the connection canvas for drawing lines
+        connection_canvas = dnd.ConnectionCanvas()
 
-    # Build disciplines, connections, outputs, and inputs from the XDSM
-    disciplines = build_disciplines_from_xdsm(gui_instance.xdsm)
-    connections = build_connection_matrix(gui_instance.xdsm)
-    outputs = build_output_matrix(gui_instance.xdsm)
-    inputs = build_input_matrix(gui_instance.xdsm)
+        # Build disciplines, connections, outputs, and inputs from the XDSM
+        disciplines = build_disciplines_from_xdsm(gui_instance.xdsm)
+        connections = build_connection_matrix(gui_instance.xdsm)
+        outputs = build_output_matrix(gui_instance.xdsm)
+        inputs = build_input_matrix(gui_instance.xdsm)
 
-    # Calculate number of columns: systems + output column (if there are outputs)
-    num_cols = len(disciplines) + (1 if outputs else 0)
+        # Calculate number of columns: systems + output column (if there are outputs)
+        num_cols = len(disciplines) + (1 if outputs else 0)
 
-    # Create the DragGrid and store reference
-    xdsm_grid = dnd.DragGrid(
-        disciplines=disciplines,
-        on_reorder=None,  # Will set after defining the callback
-        connections=connections,
-        outputs=outputs,
-        inputs=inputs,
-        canvas=connection_canvas,
-        columns=num_cols
-    ).classes('gap-x-1 gap-y-8 mt-8')
+        # Calculate fixed grid width: each cell is w-40 (160px) + gap-x-1 (0.25rem = 4px)
+        # Adding some padding for margins
+        grid_width = num_cols * 164 + 32  # 160px + 4px gap per column, plus 32px padding
+
+        # Create the DragGrid and store reference with fixed minimum width
+        xdsm_grid = dnd.DragGrid(
+            disciplines=disciplines,
+            on_reorder=None,  # Will set after defining the callback
+            connections=connections,
+            outputs=outputs,
+            inputs=inputs,
+            canvas=connection_canvas,
+            columns=num_cols
+        ).classes('gap-x-1 gap-y-8 mt-8').style(f'min-width: {grid_width}px; width: {grid_width}px;')
 
     def on_reorder(reordered_disciplines):
         """Handle reordering of disciplines in the GUI."""
