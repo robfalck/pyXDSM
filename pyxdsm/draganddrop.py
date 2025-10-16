@@ -4,6 +4,140 @@ from pydantic import BaseModel, Field
 from nicegui import ui
 
 
+class ConnectionCanvas(ui.html):
+    """SVG canvas for drawing connection lines between systems."""
+
+    def __init__(self) -> None:
+        svg_content = '''
+        <svg id="connection_canvas" class="absolute top-0 left-0 w-full h-full pointer-events-none" style="z-index: -1">
+        </svg>
+        '''
+        super().__init__(content=svg_content, sanitize=False)
+        self.connections = []
+
+    def add_connection(self, source_id: str, target_id: str, data_id: str, is_feedback: bool):
+        """
+        Add a connection to be drawn.
+
+        Args:
+            source_id: ID of source system element
+            target_id: ID of target system element
+            data_id: ID of the DataInter element
+            is_feedback: True if this is a feedback connection (backward), False if forward
+        """
+        self.connections.append({
+            'source': source_id,
+            'target': target_id,
+            'data': data_id,
+            'feedback': is_feedback
+        })
+
+    def draw_connections(self):
+        """Draw all connections on the canvas."""
+        if not self.connections:
+            return
+
+        js_code = '''
+        const svg = document.getElementById('connection_canvas');
+        if (!svg) return;
+
+        svg.innerHTML = ''; // Clear existing lines
+
+        const connections = %s;
+
+        connections.forEach(conn => {
+            const sourceEl = document.getElementById(conn.source);
+            const targetEl = document.getElementById(conn.target);
+            const dataEl = document.getElementById(conn.data);
+
+            if (!sourceEl || !targetEl || !dataEl) return;
+
+            const sourceRect = sourceEl.getBoundingClientRect();
+            const targetRect = targetEl.getBoundingClientRect();
+            const dataRect = dataEl.getBoundingClientRect();
+            const svgRect = svg.getBoundingClientRect();
+
+            if (conn.feedback) {
+                // Feedback connection: left of source -> horizontal -> right of data (hide diagonal) -> vertical -> top of data -> vertical -> bottom of target
+                // Point 1: left side of source system
+                const x1 = sourceRect.left - svgRect.left;
+                const y1 = sourceRect.top + sourceRect.height / 2 - svgRect.top;
+
+                // Point 2: right side of data element (for horizontal line)
+                const x2 = dataRect.right - svgRect.left;
+                const y2 = dataRect.top + dataRect.height / 2 - svgRect.top;
+
+                // Point 3: top of data element (vertical line from top of data)
+                const x3 = dataRect.left + dataRect.width / 2 - svgRect.left;
+                const y3 = dataRect.top - svgRect.top;
+
+                // Point 4: bottom of target system
+                const x4 = targetRect.left + targetRect.width / 2 - svgRect.left;
+                const y4 = targetRect.bottom - svgRect.top;
+
+                // Draw first segment: horizontal from source to data (at y1)
+                const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const d1 = `M ${x1} ${y1} L ${x2} ${y1}`;
+                path1.setAttribute('d', d1);
+                path1.setAttribute('stroke', 'rgba(0, 0, 0, 0.4)'); // black!40
+                path1.setAttribute('stroke-width', '5');
+                path1.setAttribute('stroke-linecap', 'butt');
+                path1.setAttribute('fill', 'none');
+                svg.appendChild(path1);
+
+                // Draw second segment: vertical from top of data to target (at x3)
+                const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const d2 = `M ${x3} ${y3} L ${x4} ${y4}`;
+                path2.setAttribute('d', d2);
+                path2.setAttribute('stroke', 'rgba(0, 0, 0, 0.4)'); // black!40
+                path2.setAttribute('stroke-width', '5');
+                path2.setAttribute('stroke-linecap', 'butt');
+                path2.setAttribute('fill', 'none');
+                svg.appendChild(path2);
+            } else {
+                // Forward connection: right of source -> horizontal -> left of data (hide diagonal) -> vertical -> bottom of data -> vertical -> top of target
+                // Point 1: right side of source system
+                const x1 = sourceRect.right - svgRect.left;
+                const y1 = sourceRect.top + sourceRect.height / 2 - svgRect.top;
+
+                // Point 2: left side of data element (for horizontal line)
+                const x2 = dataRect.left - svgRect.left;
+                const y2 = dataRect.top + dataRect.height / 2 - svgRect.top;
+
+                // Point 3: bottom of data element (vertical line starts from bottom of data)
+                const x3 = dataRect.left + dataRect.width / 2 - svgRect.left;
+                const y3 = dataRect.bottom - svgRect.top;
+
+                // Point 4: top of target system
+                const x4 = targetRect.left + targetRect.width / 2 - svgRect.left;
+                const y4 = targetRect.top - svgRect.top;
+
+                // Draw first segment: horizontal from source to data (at y1)
+                const path1 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const d1 = `M ${x1} ${y1} L ${x2} ${y1}`;
+                path1.setAttribute('d', d1);
+                path1.setAttribute('stroke', 'rgba(0, 0, 0, 0.4)'); // black!40
+                path1.setAttribute('stroke-width', '5');
+                path1.setAttribute('stroke-linecap', 'butt');
+                path1.setAttribute('fill', 'none');
+                svg.appendChild(path1);
+
+                // Draw second segment: vertical from bottom of data to target (at x3)
+                const path2 = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+                const d2 = `M ${x3} ${y3} L ${x4} ${y4}`;
+                path2.setAttribute('d', d2);
+                path2.setAttribute('stroke', 'rgba(0, 0, 0, 0.4)'); // black!40
+                path2.setAttribute('stroke-width', '5');
+                path2.setAttribute('stroke-linecap', 'butt');
+                path2.setAttribute('fill', 'none');
+                svg.appendChild(path2);
+            }
+        });
+        ''' % str(self.connections).replace("'", '"').replace('True', 'true').replace('False', 'false')
+
+        ui.run_javascript(js_code)
+
+
 # class arrow_canvas(ui.html):
 #     """Canvas for drawing arrows between cards."""
 
@@ -275,9 +409,13 @@ class DataIO(XDSMElement):
 class Connection(ui.card):
     """Display card for connections between systems."""
 
-    def __init__(self, xdsm_element: XDSMElement) -> None:
+    def __init__(self, xdsm_element: XDSMElement, connection_id: Optional[str] = None) -> None:
         super().__init__()
         self.xdsm_element = xdsm_element
+
+        # Set unique ID for line connections if provided
+        if connection_id:
+            self.props(f'id="{connection_id}"')
 
         # Apply styling from XDSMElement
         if xdsm_element.classes:
@@ -338,7 +476,7 @@ class DragGrid(ui.grid):
 
     def __init__(self, disciplines: list[XDSMElement], on_reorder: Optional[Callable] = None,
                  connections: Optional[dict] = None, outputs: Optional[dict] = None,
-                 inputs: Optional[dict] = None, **kwargs) -> None:
+                 inputs: Optional[dict] = None, canvas: Optional[ConnectionCanvas] = None, **kwargs) -> None:
         """
         Initialize the DragGrid.
 
@@ -348,6 +486,7 @@ class DragGrid(ui.grid):
             connections: Optional dictionary mapping (row, col) tuples to connection labels
             outputs: Optional dictionary mapping row index to list of output labels
             inputs: Optional dictionary mapping column index to list of input labels
+            canvas: Optional ConnectionCanvas for drawing connection lines
             **kwargs: Additional arguments passed to ui.grid
         """
         super().__init__(**kwargs)
@@ -357,6 +496,8 @@ class DragGrid(ui.grid):
         self.outputs = outputs if outputs is not None else {}
         self.inputs = inputs if inputs is not None else {}
         self.system_cards: list[System] = []
+        self.connection_cards: dict[tuple[int, int], Connection] = {}  # Track connection cards by (row, col)
+        self.canvas = canvas
         self.n = len(disciplines)
 
         # Check if we need an output column and/or input row
@@ -390,13 +531,21 @@ class DragGrid(ui.grid):
         # Clear existing content
         self.clear()
         self.system_cards.clear()
+        self.connection_cards.clear()
         DragGrid.preview_systems.clear()
+
+        # Clear canvas connections if we have a canvas
+        if self.canvas:
+            self.canvas.connections.clear()
 
         # Determine grid dimensions
         # Rows: 1 input row (if needed) + n system rows
         # Cols: n systems + 1 output column (if needed)
         num_rows = (1 if self.has_inputs else 0) + self.n
         num_cols = self.n + (1 if self.has_outputs else 0)
+
+        # Track which connections need to be registered with canvas (deferred until all systems are created)
+        deferred_connections = []
 
         with self:
             for i in range(num_rows):
@@ -438,8 +587,15 @@ class DragGrid(ui.grid):
                                 conn_label = self.connections.get((sys_row, j))
                                 if conn_label:
                                     # Connection exists - display it using DataInter style
+                                    conn_id = f'conn_{sys_row}_{j}'
                                     with ui.element('div').classes('w-40 h-20 flex items-center justify-center'):
-                                        Connection(DataInter(title=conn_label))
+                                        conn_card = Connection(DataInter(title=conn_label), connection_id=conn_id)
+                                        self.connection_cards[(sys_row, j)] = conn_card
+
+                                    # Defer connection registration until all systems are created
+                                    if self.canvas:
+                                        is_feedback = sys_row > j
+                                        deferred_connections.append((sys_row, j, conn_id, is_feedback))
                                 else:
                                     # No connection - don't display anything (empty space)
                                     ui.label('').classes('w-40 h-20')
@@ -455,6 +611,17 @@ class DragGrid(ui.grid):
                             else:
                                 # No output for this row
                                 ui.label('').classes('w-40 h-20')
+
+        # Now that all system cards are created, register deferred connections with canvas
+        if self.canvas and deferred_connections:
+            for sys_row, col, conn_id, is_feedback in deferred_connections:
+                source_id = f'card_{id(self.system_cards[sys_row])}'
+                target_id = f'card_{id(self.system_cards[col])}'
+                self.canvas.add_connection(source_id, target_id, conn_id, is_feedback)
+
+        # Draw connections after rendering is complete
+        if self.canvas:
+            ui.timer(0.1, self.canvas.draw_connections, once=True)
 
     def handle_dragover(self, _, target_index: int):
         """Handle dragover event on a diagonal system card."""

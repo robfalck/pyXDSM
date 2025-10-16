@@ -337,10 +337,10 @@ gui_instance = XDSMGUI(xdsm=sample_xdsm)
 
 # Create arrow canvas in a relatively positioned container
 with ui.element('div').classes('relative w-full h-screen'):
-    # Create the arrow canvas
-    # arrows = dnd.arrow_canvas()
-
     MainToolbar(gui_instance=gui_instance)
+
+    # Create the connection canvas for drawing lines
+    connection_canvas = dnd.ConnectionCanvas()
 
     # Build disciplines, connections, outputs, and inputs from the XDSM
     disciplines = build_disciplines_from_xdsm(gui_instance.xdsm)
@@ -358,6 +358,7 @@ with ui.element('div').classes('relative w-full h-screen'):
         connections=connections,
         outputs=outputs,
         inputs=inputs,
+        canvas=connection_canvas,
         columns=num_cols
     ).classes('gap-x-1 gap-y-8 mt-8')
 
