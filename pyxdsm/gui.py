@@ -278,6 +278,42 @@ def build_output_matrix(xdsm: XDSM) -> dict:
     return output_matrix
 
 
+def build_input_matrix(xdsm: XDSM) -> dict:
+    """
+    Build a matrix of inputs from the XDSM (top inputs).
+
+    Parameters
+    ----------
+    xdsm : XDSM
+        The XDSM diagram
+
+    Returns
+    -------
+    dict
+        Dictionary mapping column index to list of input labels
+    """
+    # Create a mapping from node_name to index
+    node_to_index = {sys.node_name: i for i, sys in enumerate(xdsm.systems)}
+
+    # Build the input matrix - each column can have multiple inputs
+    input_matrix = {}
+    for sys_name, input_node in xdsm.inputs.items():
+        sys_idx = node_to_index.get(sys_name)
+        if sys_idx is not None:
+            # Get the label text
+            if isinstance(input_node.label, (list, tuple)):
+                label_text = ', '.join(input_node.label)
+            else:
+                label_text = input_node.label
+
+            # Store inputs as col_idx -> list of labels
+            if sys_idx not in input_matrix:
+                input_matrix[sys_idx] = []
+            input_matrix[sys_idx].append(label_text)
+
+    return input_matrix
+
+
 # Create a sample XDSM with 4 systems
 sample_xdsm = XDSM()
 sample_xdsm.add_system('opt', 'Optimization', r'Optimization')
@@ -293,6 +329,9 @@ sample_xdsm.connect('d3', 'opt', r'f')  # Analysis 3 -> Optimization
 # Add outputs for Analysis 1 (pass as list to include both)
 sample_xdsm.add_output('d1', [r'a', r'b'], side='right')  # Analysis 1 outputs 'a' and 'b'
 
+# Add inputs for Analysis 2 (unconnected inputs from outside)
+sample_xdsm.add_input('d2', [r'p', r'q'])  # Analysis 2 inputs 'p' and 'q'
+
 # Create a global GUI instance to hold the XDSM reference
 gui_instance = XDSMGUI(xdsm=sample_xdsm)
 
@@ -303,10 +342,11 @@ with ui.element('div').classes('relative w-full h-screen'):
 
     MainToolbar(gui_instance=gui_instance)
 
-    # Build disciplines, connections, and outputs from the XDSM
+    # Build disciplines, connections, outputs, and inputs from the XDSM
     disciplines = build_disciplines_from_xdsm(gui_instance.xdsm)
     connections = build_connection_matrix(gui_instance.xdsm)
     outputs = build_output_matrix(gui_instance.xdsm)
+    inputs = build_input_matrix(gui_instance.xdsm)
 
     # Calculate number of columns: systems + output column (if there are outputs)
     num_cols = len(disciplines) + (1 if outputs else 0)
@@ -317,20 +357,22 @@ with ui.element('div').classes('relative w-full h-screen'):
         on_reorder=None,  # Will set after defining the callback
         connections=connections,
         outputs=outputs,
+        inputs=inputs,
         columns=num_cols
-    ).classes('gap-x-1 gap-y-8')
+    ).classes('gap-x-1 gap-y-8 mt-8')
 
     def on_reorder(reordered_disciplines):
         """Handle reordering of disciplines in the GUI."""
         # Update the XDSM object to match the new order
         gui_instance.sync_from_disciplines(reordered_disciplines)
 
-        # Rebuild the connection and output matrices based on the new system order
+        # Rebuild the connection, output, and input matrices based on the new system order
         new_connections = build_connection_matrix(gui_instance.xdsm)
         new_outputs = build_output_matrix(gui_instance.xdsm)
+        new_inputs = build_input_matrix(gui_instance.xdsm)
 
-        # Update the grid with the new connections and outputs
-        xdsm_grid.update_connections(new_connections, new_outputs)
+        # Update the grid with the new connections, outputs, and inputs
+        xdsm_grid.update_connections(new_connections, new_outputs, new_inputs)
 
         # Show notification with the new order
         system_names = [sys.node_name for sys in gui_instance.xdsm.systems]

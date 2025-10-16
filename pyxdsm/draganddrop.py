@@ -248,7 +248,7 @@ class DataInter(XDSMElement):
         if 'title' not in data:
             data['title'] = ''
         if 'classes' not in data:
-            data['classes'] = 'w-40 h-20 flex items-center justify-center self-center'
+            data['classes'] = 'w-28 h-14 flex items-center justify-center self-center'
         if 'style' not in data:
             # Light gray fill with parallelogram skew to match TikZ trapezium
             # TikZ uses trapezium with left angle 75° and right angle 105°
@@ -264,7 +264,7 @@ class DataIO(XDSMElement):
         if 'title' not in data:
             data['title'] = ''
         if 'classes' not in data:
-            data['classes'] = 'w-40 h-20 flex items-center justify-center self-center'
+            data['classes'] = 'w-28 h-14 flex items-center justify-center self-center'
         if 'style' not in data:
             # White fill with parallelogram skew to match TikZ trapezium
             # TikZ uses trapezium with left angle 75° and right angle 105°
@@ -289,7 +289,7 @@ class Connection(ui.card):
 
         # Add the label with counter-skew to keep text readable
         with self:
-            ui.label(xdsm_element.title).classes('text-center text-sm font-semibold').style('transform: skewX(15deg);')
+            ui.label(xdsm_element.title).classes('text-center text-xs font-semibold').style('transform: skewX(15deg);')
 
 
 class System(ui.card):
@@ -337,7 +337,8 @@ class DragGrid(ui.grid):
     preview_systems: list[Optional['System']] = []
 
     def __init__(self, disciplines: list[XDSMElement], on_reorder: Optional[Callable] = None,
-                 connections: Optional[dict] = None, outputs: Optional[dict] = None, **kwargs) -> None:
+                 connections: Optional[dict] = None, outputs: Optional[dict] = None,
+                 inputs: Optional[dict] = None, **kwargs) -> None:
         """
         Initialize the DragGrid.
 
@@ -346,6 +347,7 @@ class DragGrid(ui.grid):
             on_reorder: Optional callback when disciplines are reordered
             connections: Optional dictionary mapping (row, col) tuples to connection labels
             outputs: Optional dictionary mapping row index to list of output labels
+            inputs: Optional dictionary mapping column index to list of input labels
             **kwargs: Additional arguments passed to ui.grid
         """
         super().__init__(**kwargs)
@@ -353,27 +355,34 @@ class DragGrid(ui.grid):
         self.on_reorder_callback = on_reorder
         self.connections = connections if connections is not None else {}
         self.outputs = outputs if outputs is not None else {}
+        self.inputs = inputs if inputs is not None else {}
         self.system_cards: list[System] = []
         self.n = len(disciplines)
 
-        # Check if we need an output column
+        # Check if we need an output column and/or input row
         self.has_outputs = len(self.outputs) > 0
+        self.has_inputs = len(self.inputs) > 0
 
         # Set up drop zones on each diagonal cell
         self.render()
 
-    def update_connections(self, connections: dict, outputs: Optional[dict] = None):
+    def update_connections(self, connections: dict, outputs: Optional[dict] = None,
+                          inputs: Optional[dict] = None):
         """
-        Update the connection matrix and optionally outputs, then re-render the grid.
+        Update the connection matrix and optionally outputs/inputs, then re-render the grid.
 
         Args:
             connections: New dictionary mapping (row, col) tuples to connection labels
             outputs: Optional dictionary mapping row index to list of output labels
+            inputs: Optional dictionary mapping column index to list of input labels
         """
         self.connections = connections
         if outputs is not None:
             self.outputs = outputs
             self.has_outputs = len(self.outputs) > 0
+        if inputs is not None:
+            self.inputs = inputs
+            self.has_inputs = len(self.inputs) > 0
         self.render()
 
     def render(self):
@@ -383,43 +392,69 @@ class DragGrid(ui.grid):
         self.system_cards.clear()
         DragGrid.preview_systems.clear()
 
-        # Determine the number of columns: n systems + 1 output column (if needed)
+        # Determine grid dimensions
+        # Rows: 1 input row (if needed) + n system rows
+        # Cols: n systems + 1 output column (if needed)
+        num_rows = (1 if self.has_inputs else 0) + self.n
         num_cols = self.n + (1 if self.has_outputs else 0)
 
         with self:
-            for i in range(self.n):
+            for i in range(num_rows):
                 for j in range(num_cols):
-                    if j < self.n:
-                        # Within the main n x n grid
-                        if i == j:
-                            # Diagonal: discipline boxes
-                            system = System(self.disciplines[i])
-                            self.system_cards.append(system)
-
-                            # Add drop zone behavior to the system card
-                            system.on('dragover.prevent', lambda e, idx=i: self.handle_dragover(e, idx))
-                            system.on('drop', lambda e, idx=i: self.handle_drop(e, idx))
-
-                        else:
-                            # Off-diagonal: check for connections
-                            conn_label = self.connections.get((i, j))
-                            if conn_label:
-                                # Connection exists - display it using DataInter style
-                                Connection(DataInter(title=conn_label))
+                    # Check if we're in the input row
+                    if self.has_inputs and i == 0:
+                        # Input row at the top
+                        if j < self.n:
+                            # Check if this column has inputs
+                            inputs_for_col = self.inputs.get(j, [])
+                            if inputs_for_col:
+                                # Display inputs using DataIO style
+                                input_label = ', '.join(inputs_for_col)
+                                with ui.element('div').classes('w-40 h-20 flex items-center justify-center'):
+                                    Connection(DataIO(title=input_label))
                             else:
-                                # No connection - don't display anything (empty space)
+                                # No input for this column
                                 ui.label('').classes('w-40 h-20')
-                    else:
-                        # Output column (rightmost column)
-                        outputs_for_row = self.outputs.get(i, [])
-                        if outputs_for_row:
-                            # Display outputs using DataIO style
-                            # For multiple outputs, show them comma-separated
-                            output_label = ', '.join(outputs_for_row)
-                            Connection(DataIO(title=output_label))
                         else:
-                            # No output for this row
+                            # Top-right corner (input row, output column) - empty
                             ui.label('').classes('w-40 h-20')
+                    else:
+                        # System rows (adjust row index if we have an input row)
+                        sys_row = i - (1 if self.has_inputs else 0)
+
+                        if j < self.n:
+                            # Within the main n x n grid
+                            if sys_row == j:
+                                # Diagonal: discipline boxes
+                                system = System(self.disciplines[sys_row])
+                                self.system_cards.append(system)
+
+                                # Add drop zone behavior to the system card
+                                system.on('dragover.prevent', lambda e, idx=sys_row: self.handle_dragover(e, idx))
+                                system.on('drop', lambda e, idx=sys_row: self.handle_drop(e, idx))
+
+                            else:
+                                # Off-diagonal: check for connections
+                                conn_label = self.connections.get((sys_row, j))
+                                if conn_label:
+                                    # Connection exists - display it using DataInter style
+                                    with ui.element('div').classes('w-40 h-20 flex items-center justify-center'):
+                                        Connection(DataInter(title=conn_label))
+                                else:
+                                    # No connection - don't display anything (empty space)
+                                    ui.label('').classes('w-40 h-20')
+                        else:
+                            # Output column (rightmost column)
+                            outputs_for_row = self.outputs.get(sys_row, [])
+                            if outputs_for_row:
+                                # Display outputs using DataIO style
+                                # For multiple outputs, show them comma-separated
+                                output_label = ', '.join(outputs_for_row)
+                                with ui.element('div').classes('w-40 h-20 flex items-center justify-center'):
+                                    Connection(DataIO(title=output_label))
+                            else:
+                                # No output for this row
+                                ui.label('').classes('w-40 h-20')
 
     def handle_dragover(self, _, target_index: int):
         """Handle dragover event on a diagonal system card."""
