@@ -419,6 +419,46 @@ class XDSM(BaseModel):
 
         return flattened
 
+    def get_group_info(self) -> List[Dict[str, any]]:
+        """
+        Get information about groups and which systems belong to each group.
+
+        Returns
+        -------
+        List[Dict[str, any]]
+            List of dictionaries containing group information:
+            - 'name': Group node name
+            - 'label': Group label
+            - 'systems': List of flattened system names in this group
+            - 'depth': Nesting depth (0 for top-level groups)
+        """
+        groups = []
+
+        def collect_groups(xdsm_instance, prefix='', depth=0):
+            for sys in xdsm_instance.systems:
+                if sys.subsystem is not None:
+                    # This is a group
+                    group_prefix = f"{prefix}{sys.node_name}." if prefix else f"{sys.node_name}."
+                    full_group_name = f"{prefix}{sys.node_name}" if prefix else sys.node_name
+
+                    # Get all systems in this group
+                    group_systems = []
+                    for subsys in sys.subsystem.get_flattened_systems(prefix=group_prefix):
+                        group_systems.append(subsys.node_name)
+
+                    groups.append({
+                        'name': full_group_name,
+                        'label': sys.label,
+                        'systems': group_systems,
+                        'depth': depth
+                    })
+
+                    # Recursively collect nested groups
+                    collect_groups(sys.subsystem, prefix=group_prefix, depth=depth + 1)
+
+        collect_groups(self)
+        return groups
+
     def add_system(self, node_name: str, style: Union[str, 'XDSM'],
                    label: Union[str, List[str], Tuple[str, ...]],
                    stack: bool = False, faded: bool = False, label_width: Optional[int] = None,

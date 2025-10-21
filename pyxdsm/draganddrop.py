@@ -5,7 +5,15 @@ from nicegui import ui
 
 
 class ConnectionCanvas(ui.html):
-    """SVG canvas for drawing connection lines between systems."""
+    """SVG canvas for drawing connection lines and group backgrounds between systems."""
+
+    # Color palette for multiple groups
+    GROUP_COLORS = [
+        {'bg': 'rgba(200, 220, 240, 0.12)', 'border': 'rgba(100, 140, 180, 0.35)'},  # Blue
+        {'bg': 'rgba(200, 240, 220, 0.12)', 'border': 'rgba(100, 180, 140, 0.35)'},  # Green
+        {'bg': 'rgba(240, 220, 240, 0.12)', 'border': 'rgba(180, 140, 180, 0.35)'},  # Purple
+        {'bg': 'rgba(240, 230, 200, 0.12)', 'border': 'rgba(180, 160, 100, 0.35)'},  # Gold
+    ]
 
     def __init__(self) -> None:
         svg_content = '''
@@ -14,6 +22,7 @@ class ConnectionCanvas(ui.html):
         '''
         super().__init__(content=svg_content, sanitize=False)
         self.connections = []
+        self.groups = []
 
     def add_connection(self, source_id: str, target_id: str, data_id: str, is_feedback: bool):
         """
@@ -61,18 +70,110 @@ class ConnectionCanvas(ui.html):
             'data': data_id
         })
 
+    def add_group(self, group_name: str, group_label: str, system_ids: list, group_index: int = 0):
+        """
+        Add a group background for a set of systems.
+
+        Args:
+            group_name: Internal name of the group (e.g., 'g1')
+            group_label: Display label for the group
+            system_ids: List of system element IDs that belong to this group
+            group_index: Index for color selection (0-3)
+        """
+        self.groups.append({
+            'name': group_name,
+            'label': group_label,
+            'systems': system_ids,
+            'color_index': group_index % len(self.GROUP_COLORS)
+        })
+
     def draw_connections(self):
-        """Draw all connections on the canvas."""
-        if not self.connections:
+        """Draw all group backgrounds and connections on the canvas."""
+        if not self.connections and not self.groups:
             return
 
         js_code = '''
         const svg = document.getElementById('connection_canvas');
         if (!svg) return;
 
-        svg.innerHTML = ''; // Clear existing lines
+        svg.innerHTML = ''; // Clear existing content
 
+        const groups = %s;
         const connections = %s;
+        const groupColors = %s;
+
+        // STEP 1: Draw group backgrounds FIRST (so they appear behind everything)
+        groups.forEach(group => {
+            const systemElements = [];
+
+            // Collect all system elements in this group
+            group.systems.forEach(sysId => {
+                const el = document.getElementById(sysId);
+                if (el) systemElements.push(el);
+            });
+
+            if (systemElements.length === 0) return;
+
+            // Calculate bounding box for all systems in the group
+            const svgRect = svg.getBoundingClientRect();
+            let minX = Infinity, minY = Infinity;
+            let maxX = -Infinity, maxY = -Infinity;
+
+            systemElements.forEach(el => {
+                const rect = el.getBoundingClientRect();
+                const x1 = rect.left - svgRect.left;
+                const y1 = rect.top - svgRect.top;
+                const x2 = rect.right - svgRect.left;
+                const y2 = rect.bottom - svgRect.top;
+
+                minX = Math.min(minX, x1);
+                minY = Math.min(minY, y1);
+                maxX = Math.max(maxX, x2);
+                maxY = Math.max(maxY, y2);
+            });
+
+            // Add padding around the group
+            const padding = 24;
+            minX -= padding;
+            minY -= padding;
+            maxX += padding;
+            maxY += padding;
+
+            // Get colors for this group
+            const colors = groupColors[group.color_index];
+
+            // Draw rounded rectangle background
+            const rect = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+            rect.setAttribute('x', minX);
+            rect.setAttribute('y', minY);
+            rect.setAttribute('width', maxX - minX);
+            rect.setAttribute('height', maxY - minY);
+            rect.setAttribute('rx', '12');  // Corner radius
+            rect.setAttribute('ry', '12');
+            rect.setAttribute('fill', colors.bg);
+            rect.setAttribute('stroke', colors.border);
+            rect.setAttribute('stroke-width', '2');
+            rect.setAttribute('stroke-dasharray', '4 4');  // Dashed border
+            rect.setAttribute('opacity', '1');
+
+            svg.appendChild(rect);
+
+            // Optional: Add group label in top-left corner
+            // Uncomment if you want to show group labels
+            /*
+            const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            text.setAttribute('x', minX + 12);
+            text.setAttribute('y', minY + 18);
+            text.setAttribute('fill', colors.border);
+            text.setAttribute('font-size', '10px');
+            text.setAttribute('font-weight', '600');
+            text.setAttribute('text-transform', 'uppercase');
+            text.textContent = group.label;
+            svg.appendChild(text);
+            */
+        });
+
+        // STEP 2: Draw connections on top of group backgrounds
 
         connections.forEach(conn => {
             const dataEl = document.getElementById(conn.data);
@@ -208,7 +309,11 @@ class ConnectionCanvas(ui.html):
             }
             }
         });
-        ''' % str(self.connections).replace("'", '"').replace('True', 'true').replace('False', 'false')
+        ''' % (
+            str(self.groups).replace("'", '"').replace('True', 'true').replace('False', 'false'),
+            str(self.connections).replace("'", '"').replace('True', 'true').replace('False', 'false'),
+            str(self.GROUP_COLORS).replace("'", '"')
+        )
 
         ui.run_javascript(js_code)
 
@@ -616,9 +721,10 @@ class DragGrid(ui.grid):
         self.output_cards.clear()
         DragGrid.preview_systems.clear()
 
-        # Clear canvas connections if we have a canvas
+        # Clear canvas connections and groups if we have a canvas
         if self.canvas:
             self.canvas.connections.clear()
+            self.canvas.groups.clear()
 
         # Determine grid dimensions
         # Rows: 1 input row (if needed) + n system rows

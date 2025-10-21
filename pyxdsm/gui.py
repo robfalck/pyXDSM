@@ -499,6 +499,36 @@ with ui.element('div').classes('w-full h-screen flex flex-col'):
             columns=num_cols
         ).classes('gap-x-1 gap-y-8 mt-8').style(f'min-width: {grid_width}px; width: {grid_width}px;')
 
+        # Add group backgrounds to the canvas
+        groups = gui_instance.xdsm.get_group_info()
+        if groups:
+            # Get flattened systems to map names to indices
+            flattened_systems = gui_instance.xdsm.get_flattened_systems()
+            sys_name_to_index = {sys.node_name: i for i, sys in enumerate(flattened_systems)}
+
+            # Register each group with the canvas
+            for group_idx, group in enumerate(groups):
+                # Map system names to card IDs
+                system_ids = []
+                for sys_name in group['systems']:
+                    sys_idx = sys_name_to_index.get(sys_name)
+                    if sys_idx is not None and sys_idx < len(xdsm_grid.system_cards):
+                        card_id = f'card_{id(xdsm_grid.system_cards[sys_idx])}'
+                        system_ids.append(card_id)
+
+                # Add group to canvas if it has systems
+                if system_ids:
+                    group_label = group['label']
+                    if isinstance(group_label, (list, tuple)):
+                        group_label = ', '.join(group_label)
+
+                    connection_canvas.add_group(
+                        group_name=group['name'],
+                        group_label=group_label,
+                        system_ids=system_ids,
+                        group_index=group_idx
+                    )
+
         def on_reorder(reordered_disciplines):
             """Handle reordering of disciplines in the GUI."""
             # Update the XDSM object to match the new order
