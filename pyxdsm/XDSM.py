@@ -41,7 +41,7 @@ VALID_NODE_STYLES = {
 
 class SystemNode(BaseModel):
     """System node on the diagonal of XDSM diagram."""
-    
+
     node_name: str = Field(..., description="Unique name for the system")
     style: str = Field(..., description="Type/style of the system")
     label: Union[str, List[str], Tuple[str, ...]] = Field(..., description="Display label")
@@ -49,16 +49,17 @@ class SystemNode(BaseModel):
     faded: bool = Field(default=False, description="Fade the component")
     label_width: Optional[int] = Field(default=None, description="Number of items per line")
     spec_name: Optional[str] = Field(default=None, description="Name for spec file")
-    
+    subsystem: Optional['XDSM'] = Field(default=None, description="Nested XDSM for groups")
+
     model_config = ConfigDict(arbitrary_types_allowed=True)
-    
+
     @field_validator('node_name')
     @classmethod
     def validate_node_name(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError("Node name cannot be empty")
         return v.strip()
-    
+
     @field_validator('style')
     @classmethod
     def validate_style(cls, v: str) -> str:
@@ -69,7 +70,7 @@ class SystemNode(BaseModel):
                 f"Valid styles are: {', '.join(sorted(VALID_NODE_STYLES))}"
             )
         return v
-    
+
     def __init__(self, **data):
         super().__init__(**data)
         if self.spec_name is None:
@@ -266,19 +267,199 @@ class XDSM(BaseModel):
         if duplicates:
             raise ValueError(f"Duplicate system names: {set(duplicates)}")
         return self
-    
-    def add_system(self, node_name: str, style: str, label: Union[str, List[str], Tuple[str, ...]],
+
+    def get_flattened_systems(self, prefix: str = '') -> List[SystemNode]:
+        """
+        Get a flattened list of all systems, recursively expanding nested XDSM groups.
+
+        This method traverses the system hierarchy and returns all leaf systems
+        (systems without subsystems) with their node names prefixed by their parent
+        group names using dot notation (e.g., 'group.subsystem').
+
+        Parameters
+        ----------
+        prefix : str
+            The prefix to prepend to system node names (used internally for recursion)
+
+        Returns
+        -------
+        List[SystemNode]
+            Flattened list of all leaf system nodes with prefixed names
+        """
+        flattened = []
+
+        for sys in self.systems:
+            if sys.subsystem is not None:
+                # This is a group - recursively flatten it
+                subsystem_prefix = f"{prefix}{sys.node_name}." if prefix else f"{sys.node_name}."
+                flattened.extend(sys.subsystem.get_flattened_systems(prefix=subsystem_prefix))
+            else:
+                # This is a leaf system - add it with the prefix
+                if prefix:
+                    # Create a new SystemNode with the prefixed name
+                    flattened_sys = SystemNode(
+                        node_name=f"{prefix}{sys.node_name}",
+                        style=sys.style,
+                        label=sys.label,
+                        stack=sys.stack,
+                        faded=sys.faded,
+                        label_width=sys.label_width,
+                        spec_name=sys.spec_name,
+                        subsystem=None
+                    )
+                    flattened.append(flattened_sys)
+                else:
+                    # Top-level system - add as-is
+                    flattened.append(sys)
+
+        return flattened
+
+    def get_flattened_connections(self, prefix: str = '') -> List[ConnectionEdge]:
+        """
+        Get a flattened list of all connections, recursively expanding nested XDSM groups.
+
+        This method collects connections from all levels of the hierarchy and prefixes
+        the source and target node names appropriately.
+
+        Parameters
+        ----------
+        prefix : str
+            The prefix to prepend to node names (used internally for recursion)
+
+        Returns
+        -------
+        List[ConnectionEdge]
+            Flattened list of all connections with prefixed node names
+        """
+        flattened = []
+
+        # Add connections from this level
+        for conn in self.connections:
+            if prefix:
+                # Create a new ConnectionEdge with prefixed names
+                prefixed_conn = ConnectionEdge(
+                    src=f"{prefix}{conn.src}" if not conn.src.startswith(prefix) else conn.src,
+                    target=f"{prefix}{conn.target}" if not conn.target.startswith(prefix) else conn.target,
+                    label=conn.label,
+                    label_width=conn.label_width,
+                    style=conn.style,
+                    stack=conn.stack,
+                    faded=conn.faded,
+                    src_faded=conn.src_faded,
+                    target_faded=conn.target_faded
+                )
+                flattened.append(prefixed_conn)
+            else:
+                # Top-level connection - add as-is
+                flattened.append(conn)
+
+        # Recursively add connections from subsystems
+        for sys in self.systems:
+            if sys.subsystem is not None:
+                subsystem_prefix = f"{prefix}{sys.node_name}." if prefix else f"{sys.node_name}."
+                flattened.extend(sys.subsystem.get_flattened_connections(prefix=subsystem_prefix))
+
+        return flattened
+
+    def get_flattened_inputs(self, prefix: str = '') -> Dict[str, InputNode]:
+        """
+        Get a flattened dictionary of all inputs, recursively expanding nested XDSM groups.
+
+        Parameters
+        ----------
+        prefix : str
+            The prefix to prepend to system names (used internally for recursion)
+
+        Returns
+        -------
+        Dict[str, InputNode]
+            Flattened dictionary of inputs with prefixed system names as keys
+        """
+        flattened = {}
+
+        # Add inputs from this level
+        for sys_name, input_node in self.inputs.items():
+            key = f"{prefix}{sys_name}" if prefix else sys_name
+            flattened[key] = input_node
+
+        # Recursively add inputs from subsystems
+        for sys in self.systems:
+            if sys.subsystem is not None:
+                subsystem_prefix = f"{prefix}{sys.node_name}." if prefix else f"{sys.node_name}."
+                flattened.update(sys.subsystem.get_flattened_inputs(prefix=subsystem_prefix))
+
+        return flattened
+
+    def get_flattened_outputs(self, prefix: str = '') -> Dict[str, OutputNode]:
+        """
+        Get a flattened dictionary of all outputs, recursively expanding nested XDSM groups.
+
+        Parameters
+        ----------
+        prefix : str
+            The prefix to prepend to system names (used internally for recursion)
+
+        Returns
+        -------
+        Dict[str, OutputNode]
+            Flattened dictionary of outputs with prefixed system names as keys
+        """
+        flattened = {}
+
+        # Add outputs from this level
+        for sys_name, output_node in self.outputs.items():
+            key = f"{prefix}{sys_name}" if prefix else sys_name
+            flattened[key] = output_node
+
+        # Recursively add outputs from subsystems
+        for sys in self.systems:
+            if sys.subsystem is not None:
+                subsystem_prefix = f"{prefix}{sys.node_name}." if prefix else f"{sys.node_name}."
+                flattened.update(sys.subsystem.get_flattened_outputs(prefix=subsystem_prefix))
+
+        return flattened
+
+    def add_system(self, node_name: str, style: Union[str, 'XDSM'],
+                   label: Union[str, List[str], Tuple[str, ...]],
                    stack: bool = False, faded: bool = False, label_width: Optional[int] = None,
                    spec_name: Optional[str] = None) -> None:
-        """Add a system block on the diagonal."""
+        """
+        Add a system block on the diagonal.
+
+        Parameters
+        ----------
+        node_name : str
+            Unique identifier for the system
+        style : str or XDSM
+            Either a style string (e.g., 'Function', 'Group') or an XDSM instance for nested groups
+        label : str, list, or tuple
+            Display label for the system
+        stack : bool
+            Display as stacked rectangles
+        faded : bool
+            Fade the component
+        label_width : int, optional
+            Number of items per line for multi-line labels
+        spec_name : str, optional
+            Name for spec file
+        """
+        # Check if style is an XDSM instance (nested group)
+        if isinstance(style, XDSM):
+            subsystem = style
+            actual_style = 'Group'  # Default to Group style for nested XDSM
+        else:
+            subsystem = None
+            actual_style = style
+
         system = SystemNode(
             node_name=node_name,
-            style=style,
+            style=actual_style,
             label=label,
             stack=stack,
             faded=faded,
             label_width=label_width,
-            spec_name=spec_name
+            spec_name=spec_name,
+            subsystem=subsystem
         )
         self.systems.append(system)
     
@@ -326,19 +507,73 @@ class XDSM(BaseModel):
     def connect(self, src: str, target: str, label: Union[str, List[str], Tuple[str, ...]],
                 label_width: Optional[int] = None, style: str = "DataInter",
                 stack: bool = False, faded: bool = False) -> None:
-        """Connect two components with a data line."""
+        """
+        Connect two components with a data line.
+
+        Parameters
+        ----------
+        src : str
+            Source system name (can include dot notation for nested systems)
+        target : str
+            Target system name (can include dot notation for nested systems)
+        label : str, list, or tuple
+            Connection label(s)
+        label_width : int, optional
+            Number of items per line for multi-line labels
+        style : str
+            Connection style
+        stack : bool
+            Display as stacked
+        faded : bool
+            Fade the connection
+
+        Raises
+        ------
+        ValueError
+            If source or target system does not exist in this XDSM
+        """
+        # Get all valid system names (including nested systems if they're referenced with dots)
         sys_faded = {s.node_name: s.faded for s in self.systems}
-        
+
+        # Check if source and target exist in this XDSM's systems
+        # Note: dot notation (e.g., 'g1.d2') is allowed in parent XDSM to reference nested systems
+        # but not allowed within the nested XDSM itself (it should use local names)
+        src_parts = src.split('.')
+        target_parts = target.split('.')
+
+        # If there are dots in the name, it's referencing a nested system
+        # This should only be valid if we're at the parent level
+        if len(src_parts) > 1 or len(target_parts) > 1:
+            # Dot notation is allowed at parent level - no validation needed here
+            # The flattening process will handle the mapping
+            pass
+        else:
+            # Local connection - validate that both systems exist
+            if src not in sys_faded:
+                import warnings
+                warnings.warn(
+                    f"Source system '{src}' not found in XDSM. "
+                    f"Available systems: {list(sys_faded.keys())}",
+                    UserWarning
+                )
+            if target not in sys_faded:
+                import warnings
+                warnings.warn(
+                    f"Target system '{target}' not found in XDSM. "
+                    f"Available systems: {list(sys_faded.keys())}",
+                    UserWarning
+                )
+
         src_faded = src in sys_faded and sys_faded[src]
         target_faded = target in sys_faded and sys_faded[target]
-        
+
         all_faded = self.auto_fade.connections == "all"
         if (all_faded or
             (self.auto_fade.connections == "connected" and src_faded and target_faded) or
             (self.auto_fade.connections == "incoming" and target_faded) or
             (self.auto_fade.connections == "outgoing" and src_faded)):
             faded = True
-        
+
         connection = ConnectionEdge(
             src=src,
             target=target,

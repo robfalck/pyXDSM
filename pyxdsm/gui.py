@@ -258,6 +258,9 @@ def build_disciplines_from_xdsm(xdsm: XDSM) -> list:
     """
     Build a list of discipline elements from an XDSM object.
 
+    This function flattens any nested XDSM groups and displays all
+    leaf systems as if they are members of the top-level XDSM.
+
     Parameters
     ----------
     xdsm : XDSM
@@ -268,7 +271,9 @@ def build_disciplines_from_xdsm(xdsm: XDSM) -> list:
     list
         List of XDSMElement instances for the diagonal
     """
-    return [create_xdsm_element(sys) for sys in xdsm.systems]
+    # Get flattened systems (this recursively expands nested groups)
+    flattened_systems = xdsm.get_flattened_systems()
+    return [create_xdsm_element(sys) for sys in flattened_systems]
 
 
 def build_connection_matrix(xdsm: XDSM) -> dict:
@@ -285,12 +290,16 @@ def build_connection_matrix(xdsm: XDSM) -> dict:
     dict
         Dictionary mapping (row, col) tuples to connection labels
     """
-    # Create a mapping from node_name to index
-    node_to_index = {sys.node_name: i for i, sys in enumerate(xdsm.systems)}
+    # Get flattened systems and connections
+    flattened_systems = xdsm.get_flattened_systems()
+    flattened_connections = xdsm.get_flattened_connections()
+
+    # Create a mapping from node_name to index in the flattened list
+    node_to_index = {sys.node_name: i for i, sys in enumerate(flattened_systems)}
 
     # Build the connection matrix
     connection_matrix = {}
-    for conn in xdsm.connections:
+    for conn in flattened_connections:
         src_idx = node_to_index.get(conn.src)
         tgt_idx = node_to_index.get(conn.target)
 
@@ -328,12 +337,16 @@ def build_output_matrix(xdsm: XDSM) -> dict:
     dict
         Dictionary mapping row index to list of output labels
     """
-    # Create a mapping from node_name to index
-    node_to_index = {sys.node_name: i for i, sys in enumerate(xdsm.systems)}
+    # Get flattened systems and outputs
+    flattened_systems = xdsm.get_flattened_systems()
+    flattened_outputs = xdsm.get_flattened_outputs()
+
+    # Create a mapping from node_name to index in the flattened list
+    node_to_index = {sys.node_name: i for i, sys in enumerate(flattened_systems)}
 
     # Build the output matrix - each row can have multiple outputs
     output_matrix = {}
-    for sys_name, output_node in xdsm.outputs.items():
+    for sys_name, output_node in flattened_outputs.items():
         # Only process right-side outputs
         if output_node.side == 'right':
             sys_idx = node_to_index.get(sys_name)
@@ -366,12 +379,16 @@ def build_input_matrix(xdsm: XDSM) -> dict:
     dict
         Dictionary mapping column index to list of input labels
     """
-    # Create a mapping from node_name to index
-    node_to_index = {sys.node_name: i for i, sys in enumerate(xdsm.systems)}
+    # Get flattened systems and inputs
+    flattened_systems = xdsm.get_flattened_systems()
+    flattened_inputs = xdsm.get_flattened_inputs()
+
+    # Create a mapping from node_name to index in the flattened list
+    node_to_index = {sys.node_name: i for i, sys in enumerate(flattened_systems)}
 
     # Build the input matrix - each column can have multiple inputs
     input_matrix = {}
-    for sys_name, input_node in xdsm.inputs.items():
+    for sys_name, input_node in flattened_inputs.items():
         sys_idx = node_to_index.get(sys_name)
         if sys_idx is not None:
             # Get the label text
@@ -392,27 +409,35 @@ def build_input_matrix(xdsm: XDSM) -> dict:
 sample_xdsm = XDSM()
 sample_xdsm.add_system('opt', 'Optimization', r'Optimization')
 sample_xdsm.add_system('d1', 'Function', r'Analysis 1')
-sample_xdsm.add_system('newton', 'MDA', r'Newton')
-sample_xdsm.add_system('d2', 'Function', r'Analysis 2')
-sample_xdsm.add_system('d3', 'Function', r'Analysis 3')
+
+sample_group = XDSM()
+
+sample_group.add_system('newton', 'MDA', r'Newton')
+sample_group.add_system('d2', 'Function', r'Analysis 2')
+sample_group.add_system('d3', 'Function', r'Analysis 3')
+
+sample_xdsm.add_system('g1', sample_group, r'Group 1')
 
 # Add connections between systems
 sample_xdsm.connect('opt', 'd1', r'x')  # Optimization -> Analysis 1
 # sample_xdsm.connect('opt', 'newton', r'x')  # Optimization -> Newton
-sample_xdsm.connect('opt', 'd2', r'x')  # Optimization -> Analysis 2
+sample_xdsm.connect('opt', 'g1.d2', r'x')  # Optimization -> Analysis 2
 # sample_xdsm.connect('d1', 'newton', r'y')  # Analysis 1 -> Newton
-sample_xdsm.connect('d1', 'd2', r'y')  # Analysis 1 -> Analysis 2
-sample_xdsm.connect('newton', 'd2', r'\theta')  # Newton -> Analysis 2
-sample_xdsm.connect('newton', 'd3', r'\theta')  # Newton -> Analysis 3
-sample_xdsm.connect('d2', 'd3', r'z')  # Analysis 2 -> Analysis 3
-sample_xdsm.connect('d3', 'newton', r'\mathcal{R}(\theta)')  # Analysis 3 -> Newton (feedback)
-sample_xdsm.connect('d3', 'opt', r'f')  # Analysis 3 -> Optimization (feedback)
+sample_xdsm.connect('d1', 'g1.d2', r'y')  # Analysis 1 -> Analysis 2
+
+sample_group.connect('newton', 'd2', r'\theta')  # Newton -> Analysis 2
+sample_group.connect('newton', 'd3', r'\theta')  # Newton -> Analysis 3
+sample_group.connect('d2', 'd3', r'z')  # Analysis 2 -> Analysis 3
+sample_group.connect('d3', 'newton', r'\mathcal{R}(\theta)')  # Analysis 3 -> Newton (feedback)
+
+# Feedback connection from nested system to parent - must be defined in parent XDSM
+sample_xdsm.connect('g1.d3', 'opt', r'f')  # Analysis 3 -> Optimization (feedback)
 
 # Add outputs for Analysis 1 (pass as list to include both)
 sample_xdsm.add_output('d1', [r'a', r'b'], side='right')  # Analysis 1 outputs 'a' and 'b'
 
 # Add inputs for Analysis 2 (unconnected inputs from outside)
-sample_xdsm.add_input('d2', [r'p', r'q'])  # Analysis 2 inputs 'p' and 'q'
+sample_group.add_input('d2', [r'p', r'q'])  # Analysis 2 inputs 'p' and 'q'
 
 # Create a global GUI instance to hold the XDSM reference
 gui_instance = XDSMGUI(xdsm=sample_xdsm)
