@@ -158,19 +158,16 @@ class ConnectionCanvas(ui.html):
 
             svg.appendChild(rect);
 
-            // Optional: Add group label in top-left corner
-            // Uncomment if you want to show group labels
-            /*
+            // Add group label (dotted pathname) in top-left corner
             const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
             text.setAttribute('x', minX + 12);
-            text.setAttribute('y', minY + 18);
+            text.setAttribute('y', minY + 20);
             text.setAttribute('fill', colors.border);
-            text.setAttribute('font-size', '10px');
-            text.setAttribute('font-weight', '600');
-            text.setAttribute('text-transform', 'uppercase');
-            text.textContent = group.label;
+            text.setAttribute('font-family', 'inherit');  // Use same font as system labels
+            text.setAttribute('font-size', '14px');  // Match system label size
+            text.setAttribute('font-weight', 'bold');  // Match system label weight (font-bold)
+            text.textContent = group.name;  // Use dotted pathname (e.g., "g1")
             svg.appendChild(text);
-            */
         });
 
         // STEP 2: Draw connections on top of group backgrounds
