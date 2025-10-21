@@ -23,21 +23,50 @@ def handle_drop(todo: ToDo, location: str):
 
 
 class MainToolbar(ui.row):
-    def __init__(self, gui_instance):
+    def __init__(self, gui_instance, on_new_callback=None):
         super().__init__()
         self.gui = gui_instance
+        self.on_new_callback = on_new_callback
         self.classes('bg-zinc-200')
 
         with self:
-            ui.button('New', on_click=lambda: ui.notify('New Model Requested'))
+            ui.button('New', on_click=self._new_diagram)
 
             with ui.dropdown_button('Export', auto_close=True):
                 ui.item('PDF', on_click=self._export_pdf)
-                ui.item('JSON', on_click=lambda: ui.notify('Exporting to JSON'))
+                ui.item('JSON', on_click=self._export_json)
 
             self.lock_icon = ui.icon('lock_open', size='md')
             self.switch = ui.switch('Unlocked')
             self.switch.on_value_change(self._on_toggle)
+
+    async def _new_diagram(self):
+        """Create a new empty XDSM diagram with confirmation."""
+        # Show confirmation dialog
+        with ui.dialog() as dialog, ui.card():
+            ui.label('Are you sure you want to create a new diagram?').classes('text-lg mb-4')
+            ui.label('This will discard the current diagram.').classes('text-sm text-gray-600 mb-4')
+            with ui.row().classes('w-full justify-end gap-2'):
+                ui.button('Cancel', on_click=lambda: dialog.submit(False)).props('flat')
+                ui.button('Create New', on_click=lambda: dialog.submit(True)).props('color=primary')
+
+        result = await dialog
+
+        if result:
+            try:
+                # Create a new empty XDSM object
+                new_xdsm = XDSM()
+
+                # Update the GUI's XDSM reference
+                self.gui.xdsm = new_xdsm
+
+                # Call the callback to refresh the diagram
+                if self.on_new_callback:
+                    await self.on_new_callback()
+
+                ui.notify('New XDSM diagram created!')
+            except Exception as e:
+                ui.notify(f'Error creating new diagram: {str(e)}', type='negative')
 
     def _export_pdf(self):
         """Export the XDSM diagram to PDF."""
@@ -67,6 +96,18 @@ class MainToolbar(ui.row):
                     ui.notify(f'Error: PDF file not generated at {pdf_path}', type='negative')
         except Exception as e:
             ui.notify(f'Error exporting PDF: {str(e)}', type='negative')
+
+    def _export_json(self):
+        """Export the XDSM diagram to JSON."""
+        try:
+            # Convert XDSM to JSON string
+            json_str = self.gui.xdsm.to_json()
+
+            # Trigger download in the browser
+            ui.download(json_str.encode('utf-8'), 'xdsm_diagram.json')
+            ui.notify('JSON exported successfully!')
+        except Exception as e:
+            ui.notify(f'Error exporting JSON: {str(e)}', type='negative')
 
     def _on_toggle(self, e):
         ui.notify(e.value)
@@ -357,9 +398,9 @@ sample_xdsm.add_system('d3', 'Function', r'Analysis 3')
 
 # Add connections between systems
 sample_xdsm.connect('opt', 'd1', r'x')  # Optimization -> Analysis 1
-sample_xdsm.connect('opt', 'newton', r'x')  # Optimization -> Newton
+# sample_xdsm.connect('opt', 'newton', r'x')  # Optimization -> Newton
 sample_xdsm.connect('opt', 'd2', r'x')  # Optimization -> Analysis 2
-sample_xdsm.connect('d1', 'newton', r'y')  # Analysis 1 -> Newton
+# sample_xdsm.connect('d1', 'newton', r'y')  # Analysis 1 -> Newton
 sample_xdsm.connect('d1', 'd2', r'y')  # Analysis 1 -> Analysis 2
 sample_xdsm.connect('newton', 'd2', r'\theta')  # Newton -> Analysis 2
 sample_xdsm.connect('newton', 'd3', r'\theta')  # Newton -> Analysis 3
@@ -378,10 +419,34 @@ gui_instance = XDSMGUI(xdsm=sample_xdsm)
 
 # Create arrow canvas in a relatively positioned container
 with ui.element('div').classes('w-full h-screen flex flex-col'):
-    MainToolbar(gui_instance=gui_instance)
+    async def refresh_diagram():
+        """Refresh the XDSM diagram display after creating new diagram."""
+        # Clear the scrollable container and rebuild the grid
+        scrollable_container.clear()
+        with scrollable_container:
+            build_xdsm_grid()
+        # Trigger KaTeX rendering for the new content
+        ui.run_javascript('''
+            setTimeout(() => {
+                if (window.renderMathInElement) {
+                    renderMathInElement(document.body, {
+                        delimiters: [
+                            {left: "$$", right: "$$", display: true},
+                            {left: "$", right: "$", display: false}
+                        ]
+                    });
+                }
+            }, 100);
+        ''')
+
+    # Create toolbar with new callback
+    MainToolbar(gui_instance=gui_instance, on_new_callback=refresh_diagram)
 
     # Scrollable container for the XDSM diagram
-    with ui.element('div').classes('relative flex-1 overflow-auto'):
+    scrollable_container = ui.element('div').classes('relative flex-1 overflow-auto')
+
+    def build_xdsm_grid():
+        """Build the XDSM grid from the current XDSM object."""
         # Create the connection canvas for drawing lines
         connection_canvas = dnd.ConnectionCanvas()
 
@@ -409,25 +474,29 @@ with ui.element('div').classes('w-full h-screen flex flex-col'):
             columns=num_cols
         ).classes('gap-x-1 gap-y-8 mt-8').style(f'min-width: {grid_width}px; width: {grid_width}px;')
 
-    def on_reorder(reordered_disciplines):
-        """Handle reordering of disciplines in the GUI."""
-        # Update the XDSM object to match the new order
-        gui_instance.sync_from_disciplines(reordered_disciplines)
+        def on_reorder(reordered_disciplines):
+            """Handle reordering of disciplines in the GUI."""
+            # Update the XDSM object to match the new order
+            gui_instance.sync_from_disciplines(reordered_disciplines)
 
-        # Rebuild the connection, output, and input matrices based on the new system order
-        new_connections = build_connection_matrix(gui_instance.xdsm)
-        new_outputs = build_output_matrix(gui_instance.xdsm)
-        new_inputs = build_input_matrix(gui_instance.xdsm)
+            # Rebuild the connection, output, and input matrices based on the new system order
+            new_connections = build_connection_matrix(gui_instance.xdsm)
+            new_outputs = build_output_matrix(gui_instance.xdsm)
+            new_inputs = build_input_matrix(gui_instance.xdsm)
 
-        # Update the grid with the new connections, outputs, and inputs
-        xdsm_grid.update_connections(new_connections, new_outputs, new_inputs)
+            # Update the grid with the new connections, outputs, and inputs
+            xdsm_grid.update_connections(new_connections, new_outputs, new_inputs)
 
-        # Show notification with the new order
-        system_names = [sys.node_name for sys in gui_instance.xdsm.systems]
-        ui.notify(f'XDSM systems reordered: {system_names}')
+            # Show notification with the new order
+            system_names = [sys.node_name for sys in gui_instance.xdsm.systems]
+            ui.notify(f'XDSM systems reordered: {system_names}')
 
-    # Set the callback after defining it
-    xdsm_grid.on_reorder_callback = on_reorder
+        # Set the callback after defining it
+        xdsm_grid.on_reorder_callback = on_reorder
+
+    # Build the initial grid
+    with scrollable_container:
+        build_xdsm_grid()
 
 
     # with ui.row():
