@@ -133,7 +133,7 @@ class ConnectionCanvas(ui.html):
             });
 
             // Add padding around the group
-            const padding = 24;
+            const padding = 12;
             minX -= padding;
             minY -= padding;
             maxX += padding;

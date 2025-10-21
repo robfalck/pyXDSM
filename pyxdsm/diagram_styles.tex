@@ -30,6 +30,18 @@
 \newcommand{\implicitColor}{salmon}
 \newcommand{\optimizationColor}{red} % also used by DOE
 
+% Group background colors (matching GUI colors)
+\definecolor{groupblue}{HTML}{C8DCF0}
+\definecolor{groupgreen}{HTML}{C8F0DC}
+\definecolor{grouppurple}{HTML}{F0DCF0}
+\definecolor{groupgold}{HTML}{F0E6C8}
+
+% Group background styles
+\tikzstyle{GroupBackground0} = [rounded corners=12pt, draw=groupblue!35, fill=groupblue!12, line width=2pt, dashed, dash pattern=on 4pt off 4pt, inner sep=12pt]
+\tikzstyle{GroupBackground1} = [rounded corners=12pt, draw=groupgreen!35, fill=groupgreen!12, line width=2pt, dashed, dash pattern=on 4pt off 4pt, inner sep=12pt]
+\tikzstyle{GroupBackground2} = [rounded corners=12pt, draw=grouppurple!35, fill=grouppurple!12, line width=2pt, dashed, dash pattern=on 4pt off 4pt, inner sep=12pt]
+\tikzstyle{GroupBackground3} = [rounded corners=12pt, draw=groupgold!35, fill=groupgold!12, line width=2pt, dashed, dash pattern=on 4pt off 4pt, inner sep=12pt]
+
 % Component types
 \tikzstyle{Optimization} = [\procShape,draw,fill=\optimizationColor!\fillOpacity,inner sep=6pt,minimum height=1cm,text badly centered]
 \tikzstyle{MDA} = [\procShape,draw,fill=orange!\fillOpacity,inner sep=6pt,minimum height=1cm,text badly centered]
@@ -72,9 +84,10 @@
 \tikzstyle{MatrixSetup} = [row sep=3mm, column sep=2mm]
 
 % Declare a background layer for showing node connections
+\pgfdeclarelayer{groups}
 \pgfdeclarelayer{data}
 \pgfdeclarelayer{process}
-\pgfsetlayers{data,process,main}
+\pgfsetlayers{groups,data,process,main}
 
 % A new command to split the component text over multiple lines
 

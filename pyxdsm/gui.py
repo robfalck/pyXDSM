@@ -442,6 +442,8 @@ sample_group.add_input('d2', [r'p', r'q'])  # Analysis 2 inputs 'p' and 'q'
 # Create a global GUI instance to hold the XDSM reference
 gui_instance = XDSMGUI(xdsm=sample_xdsm)
 
+sample_xdsm.write('group_test')
+
 # Create arrow canvas in a relatively positioned container
 with ui.element('div').classes('w-full h-screen flex flex-col'):
     async def refresh_diagram():

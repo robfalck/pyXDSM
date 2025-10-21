@@ -22,7 +22,7 @@ tikzpicture_template = r"""
 % Optional packages such as sfmath set through python interface
 % \usepackage{{{optional_packages}}}
 
-% \usetikzlibrary{{arrows,chains,positioning,scopes,shapes.geometric,shapes.misc,shadows}}
+% \usetikzlibrary{{arrows,chains,positioning,scopes,shapes.geometric,shapes.misc,shadows,fit}}
 
 %%% End Preamble Requirements %%%
 
@@ -31,6 +31,11 @@ tikzpicture_template = r"""
 
 \matrix[MatrixSetup]{{
 {nodes}}};
+
+% XDSM group backgrounds
+\begin{{pgfonlayer}}{{groups}}
+{groups}
+\end{{pgfonlayer}}
 
 % XDSM process chains
 {process}
@@ -56,7 +61,7 @@ tex_template = r"""
 \usepackage{{{optional_packages}}}
 
 % Define the set of TikZ packages to be included in the architecture diagram document
-\usetikzlibrary{{arrows,chains,positioning,scopes,shapes.geometric,shapes.misc,shadows}}
+\usetikzlibrary{{arrows,chains,positioning,scopes,shapes.geometric,shapes.misc,shadows,fit}}
 
 
 % Set the border around all of the architecture diagrams to be tight to the diagrams themselves
@@ -119,31 +124,36 @@ class XDSMLatexWriter:
     
     @staticmethod
     def _build_node_grid(xdsm: 'XDSM') -> str:
-        """Build the TikZ node grid."""
-        size = len(xdsm.systems)
+        """Build the TikZ node grid using flattened systems."""
+        # Use flattened systems to handle nested groups
+        flattened_systems = xdsm.get_flattened_systems()
+        flattened_inputs = xdsm.get_flattened_inputs()
+        flattened_outputs = xdsm.get_flattened_outputs()
+
+        size = len(flattened_systems)
         comps_rows = np.arange(size)
         comps_cols = np.arange(size)
-        
-        if xdsm.inputs:
+
+        if flattened_inputs:
             size += 1
             comps_rows += 1
-        
-        if any(out.side == "left" for out in xdsm.outputs.values()):
+
+        if any(out.side == "left" for out in flattened_outputs.values()):
             size += 1
             comps_cols += 1
-        
-        if any(out.side == "right" for out in xdsm.outputs.values()):
+
+        if any(out.side == "right" for out in flattened_outputs.values()):
             size += 1
-        
+
         row_idx_map = {}
         col_idx_map = {}
-        
+
         node_str = r"\node [{style}] ({node_name}) {{{node_label}}};"
         grid = np.empty((size, size), dtype=object)
         grid[:] = ""
-        
+
         # Add diagonal systems
-        for i_row, j_col, comp in zip(comps_rows, comps_cols, xdsm.systems):
+        for i_row, j_col, comp in zip(comps_rows, comps_cols, flattened_systems):
             style = comp.style
             if comp.stack:
                 style += ",stack"
@@ -157,9 +167,10 @@ class XDSMLatexWriter:
 
             row_idx_map[comp.node_name] = i_row
             col_idx_map[comp.node_name] = j_col
-        
-        # Add off-diagonal connection nodes
-        for conn in xdsm.connections:
+
+        # Add off-diagonal connection nodes (use flattened connections)
+        flattened_connections = xdsm.get_flattened_connections()
+        for conn in flattened_connections:
             src_row = row_idx_map[conn.src]
             target_col = col_idx_map[conn.target]
 
@@ -174,9 +185,9 @@ class XDSMLatexWriter:
             node = node_str.format(style=style, node_name=node_name, node_label=label)
 
             grid[src_row, target_col] = node
-        
-        # Add left outputs
-        for comp_name, out in xdsm.outputs.items():
+
+        # Add left outputs (use flattened outputs)
+        for comp_name, out in flattened_outputs.items():
             if out.side != "left":
                 continue
             style = out.style
@@ -190,9 +201,9 @@ class XDSMLatexWriter:
             sanitized_name = _sanitize_tikz_name(out.node_name)
             node = node_str.format(style=style, node_name=sanitized_name, node_label=label)
             grid[i_row, 0] = node
-        
-        # Add right outputs
-        for comp_name, out in xdsm.outputs.items():
+
+        # Add right outputs (use flattened outputs)
+        for comp_name, out in flattened_outputs.items():
             if out.side != "right":
                 continue
             style = out.style
@@ -206,9 +217,9 @@ class XDSMLatexWriter:
             sanitized_name = _sanitize_tikz_name(out.node_name)
             node = node_str.format(style=style, node_name=sanitized_name, node_label=label)
             grid[i_row, -1] = node
-        
-        # Add inputs
-        for comp_name, inp in xdsm.inputs.items():
+
+        # Add inputs (use flattened inputs)
+        for comp_name, inp in flattened_inputs.items():
             style = inp.style
             if inp.stack:
                 style += ",stack"
@@ -230,13 +241,15 @@ class XDSMLatexWriter:
     
     @staticmethod
     def _build_edges(xdsm: 'XDSM') -> str:
-        """Build the TikZ edge definitions."""
+        """Build the TikZ edge definitions using flattened connections."""
         h_edges = []
         v_edges = []
-        
+
         edge_format = "({start}) edge [{style}] ({end})"
-        
-        for conn in xdsm.connections:
+
+        # Use flattened connections to handle nested groups
+        flattened_connections = xdsm.get_flattened_connections()
+        for conn in flattened_connections:
             h_style = "DataLine"
             v_style = "DataLine"
 
@@ -251,7 +264,9 @@ class XDSMLatexWriter:
             h_edges.append(edge_format.format(start=src_sanitized, end=od_node, style=h_style))
             v_edges.append(edge_format.format(start=od_node, end=target_sanitized, style=v_style))
 
-        for comp_name, out in xdsm.outputs.items():
+        # Use flattened outputs to handle nested groups
+        flattened_outputs = xdsm.get_flattened_outputs()
+        for comp_name, out in flattened_outputs.items():
             if out.side != "left":
                 continue
             style = "DataLine"
@@ -261,7 +276,7 @@ class XDSMLatexWriter:
             out_sanitized = _sanitize_tikz_name(out.node_name)
             h_edges.append(edge_format.format(start=comp_sanitized, end=out_sanitized, style=style))
 
-        for comp_name, out in xdsm.outputs.items():
+        for comp_name, out in flattened_outputs.items():
             if out.side != "right":
                 continue
             style = "DataLine"
@@ -271,7 +286,9 @@ class XDSMLatexWriter:
             out_sanitized = _sanitize_tikz_name(out.node_name)
             h_edges.append(edge_format.format(start=comp_sanitized, end=out_sanitized, style=style))
 
-        for comp_name, inp in xdsm.inputs.items():
+        # Use flattened inputs to handle nested groups
+        flattened_inputs = xdsm.get_flattened_inputs()
+        for comp_name, inp in flattened_inputs.items():
             style = "DataLine"
             if inp.faded:
                 style += ",faded"
@@ -289,11 +306,16 @@ class XDSMLatexWriter:
     
     @staticmethod
     def _build_process_chain(xdsm: 'XDSM') -> str:
-        """Build the TikZ process chain definitions."""
-        sys_names = [s.node_name for s in xdsm.systems]
+        """Build the TikZ process chain definitions using flattened systems."""
+        # Use flattened systems to handle nested groups
+        flattened_systems = xdsm.get_flattened_systems()
+        flattened_inputs = xdsm.get_flattened_inputs()
+        flattened_outputs = xdsm.get_flattened_outputs()
+
+        sys_names = [s.node_name for s in flattened_systems]
         output_names = (
-            [inp.node_name for inp in xdsm.inputs.values()] +
-            [out.node_name for out in xdsm.outputs.values()]
+            [inp.node_name for inp in flattened_inputs.values()] +
+            [out.node_name for out in flattened_outputs.values()]
         )
 
         chain_str = ""
@@ -331,6 +353,48 @@ class XDSMLatexWriter:
         return chain_str
 
     @staticmethod
+    def _build_group_backgrounds(xdsm: 'XDSM') -> str:
+        """
+        Build the TikZ group background definitions.
+
+        Groups are rendered as rounded rectangles with dashed borders behind the systems.
+        Uses TikZ's fit library to create bounding boxes around grouped nodes.
+        """
+        groups = xdsm.get_group_info()
+
+        if not groups:
+            return ""
+
+        group_str = ""
+
+        for group_idx, group in enumerate(groups):
+            # Get the color index (rotate through 4 colors)
+            color_idx = group_idx % 4
+
+            # Get all sanitized node names for systems in this group
+            node_names = []
+            for sys_name in group['systems']:
+                sanitized_name = _sanitize_tikz_name(sys_name)
+                node_names.append(f"({sanitized_name})")
+
+            if not node_names:
+                continue
+
+            # Create a TikZ node using the 'fit' library to encompass all systems
+            # The node will have the GroupBackground style
+            fit_nodes = "".join(node_names)
+            group_name = _sanitize_tikz_name(group['name'])
+
+            # Add group label (dotted pathname) in top-left corner
+            label_text = f"${group['name']}$"  # Wrap in math mode for italic
+
+            group_str += f"\\node [GroupBackground{color_idx}, fit={fit_nodes}, " + \
+                        f"label={{[anchor=north west, font=\\sffamily]north west:{label_text}}}] " + \
+                        f"(group_{group_name}) {{}};\n"
+
+        return group_str
+
+    @staticmethod
     def _compose_optional_package_list(xdsm: 'XDSM') -> str:
         """Compose the optional LaTeX package list."""
         packages = xdsm.optional_packages.copy()
@@ -362,6 +426,7 @@ class XDSMLatexWriter:
         nodes = XDSMLatexWriter._build_node_grid(xdsm)
         edges = XDSMLatexWriter._build_edges(xdsm)
         process = XDSMLatexWriter._build_process_chain(xdsm)
+        groups = XDSMLatexWriter._build_group_backgrounds(xdsm)
 
         module_path = os.path.dirname(__file__)
         diagram_styles_path = os.path.join(module_path, "diagram_styles")
@@ -373,6 +438,7 @@ class XDSMLatexWriter:
             nodes=nodes,
             edges=edges,
             process=process,
+            groups=groups,
             diagram_styles_path=diagram_styles_path,
             optional_packages=optional_packages_str,
         )
