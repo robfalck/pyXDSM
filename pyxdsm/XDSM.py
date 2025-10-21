@@ -459,6 +459,137 @@ class XDSM(BaseModel):
         collect_groups(self)
         return groups
 
+    def swap_systems(self, system1_name: str, system2_name: str) -> None:
+        """
+        Swap two systems, potentially across hierarchy boundaries.
+
+        This method swaps the positions of two systems in the XDSM, even if one is in a
+        nested group and the other is in the parent or a different group. All connections
+        are updated to reflect the swap.
+
+        Parameters
+        ----------
+        system1_name : str
+            Name of the first system (can include dot notation for nested systems)
+        system2_name : str
+            Name of the second system (can include dot notation for nested systems)
+
+        Examples
+        --------
+        >>> xdsm.swap_systems('d1', 'g1.d2')  # Swap top-level d1 with nested g1.d2
+        """
+        # Helper function to find a system and its parent XDSM
+        def find_system(name, parent_xdsm=None, prefix=''):
+            parts = name.split('.')
+
+            # Check if it's a direct child of this XDSM
+            for sys in self.systems:
+                if prefix + sys.node_name == name:
+                    return sys, self, sys.node_name
+
+                # Check nested groups
+                if sys.subsystem is not None:
+                    group_prefix = f"{prefix}{sys.node_name}."
+                    result = _find_in_subsystem(sys.subsystem, name, group_prefix)
+                    if result:
+                        return result
+
+            return None
+
+        def _find_in_subsystem(xdsm_inst, full_name, prefix):
+            for sys in xdsm_inst.systems:
+                if prefix + sys.node_name == full_name:
+                    return sys, xdsm_inst, sys.node_name
+
+                if sys.subsystem is not None:
+                    group_prefix = f"{prefix}{sys.node_name}."
+                    result = _find_in_subsystem(sys.subsystem, full_name, group_prefix)
+                    if result:
+                        return result
+            return None
+
+        # Find both systems
+        sys1_info = find_system(system1_name)
+        sys2_info = find_system(system2_name)
+
+        if not sys1_info or not sys2_info:
+            raise ValueError(f"Could not find systems: {system1_name}, {system2_name}")
+
+        sys1, parent1, local_name1 = sys1_info
+        sys2, parent2, local_name2 = sys2_info
+
+        # Swap the systems in their respective parents
+        idx1 = parent1.systems.index(sys1)
+        idx2 = parent2.systems.index(sys2)
+
+        if parent1 == parent2:
+            # Same parent - simple swap
+            parent1.systems[idx1], parent1.systems[idx2] = parent1.systems[idx2], parent1.systems[idx1]
+        else:
+            # Different parents - swap across boundaries
+            parent1.systems[idx1] = sys2
+            parent2.systems[idx2] = sys1
+
+            # Update connections to reflect the swap
+            self._update_connections_after_swap(system1_name, system2_name, local_name1, local_name2)
+
+    def _update_connections_after_swap(self, full_name1, full_name2, local_name1, local_name2):
+        """Update all connections after swapping two systems across hierarchy boundaries."""
+        # Parse the full names to understand hierarchy
+        parts1 = full_name1.split('.')
+        parts2 = full_name2.split('.')
+
+        # Update connections in the top-level XDSM
+        for conn in self.connections:
+            if conn.src == full_name1:
+                conn.src = full_name2
+            elif conn.src == full_name2:
+                conn.src = full_name1
+
+            if conn.target == full_name1:
+                conn.target = full_name2
+            elif conn.target == full_name2:
+                conn.target = full_name1
+
+        # Recursively update connections in nested groups
+        self._update_nested_connections(full_name1, full_name2, local_name1, local_name2)
+
+    def _update_nested_connections(self, full_name1, full_name2, local_name1, local_name2, prefix=''):
+        """Recursively update connections within nested groups."""
+        parts1 = full_name1.split('.')
+        parts2 = full_name2.split('.')
+
+        # Check each system to see if it's a group
+        for sys in self.systems:
+            if sys.subsystem is not None:
+                group_prefix = f"{prefix}{sys.node_name}." if prefix else f"{sys.node_name}."
+
+                # Check if either system belongs to this group
+                sys1_in_group = full_name1.startswith(group_prefix)
+                sys2_in_group = full_name2.startswith(group_prefix)
+
+                # Update connections within this group's subsystem
+                for conn in sys.subsystem.connections:
+                    # Determine what names to use for updates
+                    # If both systems are in this group, update using local names
+                    if sys1_in_group and sys2_in_group:
+                        # Both in same group - use local names (strip group prefix)
+                        name1_in_group = full_name1[len(group_prefix):]
+                        name2_in_group = full_name2[len(group_prefix):]
+
+                        if conn.src == name1_in_group:
+                            conn.src = name2_in_group
+                        elif conn.src == name2_in_group:
+                            conn.src = name1_in_group
+
+                        if conn.target == name1_in_group:
+                            conn.target = name2_in_group
+                        elif conn.target == name2_in_group:
+                            conn.target = name1_in_group
+
+                # Recursively update deeper nested groups
+                sys.subsystem._update_nested_connections(full_name1, full_name2, local_name1, local_name2, group_prefix)
+
     def add_system(self, node_name: str, style: Union[str, 'XDSM'],
                    label: Union[str, List[str], Tuple[str, ...]],
                    stack: bool = False, faded: bool = False, label_width: Optional[int] = None,

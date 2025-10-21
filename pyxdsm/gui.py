@@ -190,30 +190,62 @@ class XDSMGUI:
         Synchronize the XDSM systems list from the GUI disciplines list.
 
         This updates the XDSM to match the current order and state of
-        the disciplines shown in the GUI.
+        the disciplines shown in the GUI, including swapping systems across
+        hierarchy boundaries when necessary.
 
         Parameters
         ----------
         disciplines : list
             List of XDSMElement instances from the GUI
         """
-        # Map discipline titles back to system nodes
-        # We need to find which system corresponds to each discipline
+        # Get the current flattened system list with their full names
+        old_flattened = self.xdsm.get_flattened_systems()
+
+        # Map discipline titles to system names (with dot notation)
+        old_order = []
+        for sys in old_flattened:
+            sys_label = sys.label
+            if isinstance(sys_label, (list, tuple)):
+                sys_label = ', '.join(sys_label)
+            old_order.append((sys.node_name, sys_label))
+
+        # Map the new order from disciplines
         new_order = []
         for discipline in disciplines:
-            # Find the system with matching label
-            for system in self.xdsm.systems:
-                system_label = system.label
-                if isinstance(system_label, (list, tuple)):
-                    system_label = ', '.join(system_label)
-
-                if system_label == discipline.title:
-                    new_order.append(system)
+            # Find which system this discipline corresponds to
+            for sys_name, sys_label in old_order:
+                if sys_label == discipline.title:
+                    new_order.append(sys_name)
                     break
 
-        # Update the systems list
-        if len(new_order) == len(self.xdsm.systems):
-            self.xdsm.systems = new_order
+        # Now detect swaps by comparing old and new orders
+        if len(new_order) != len(old_order):
+            return  # Something went wrong, bail out
+
+        # Find pairs of systems that need to be swapped
+        # We iterate through and find the first mismatch, swap it, and continue
+        processed = set()
+        for i in range(len(new_order)):
+            if i in processed:
+                continue
+
+            old_name = old_order[i][0]
+            new_name = new_order[i]
+
+            if old_name != new_name:
+                # Find where old_name is in the new order
+                try:
+                    j = new_order.index(old_name, i)
+                    # Swap systems at positions i and j in the XDSM
+                    self.xdsm.swap_systems(new_order[i], old_name)
+
+                    # Update our tracking
+                    new_order[i], new_order[j] = new_order[j], new_order[i]
+                    processed.add(i)
+                    processed.add(j)
+                except ValueError:
+                    # old_name not found in remaining list, skip
+                    pass
 
 
 # Mapping from XDSM system styles to draganddrop element classes
@@ -543,6 +575,36 @@ with ui.element('div').classes('w-full h-screen flex flex-col'):
 
             # Update the grid with the new connections, outputs, and inputs
             xdsm_grid.update_connections(new_connections, new_outputs, new_inputs)
+
+            # Re-register group backgrounds after reordering
+            groups = gui_instance.xdsm.get_group_info()
+            if groups:
+                # Get flattened systems to map names to indices
+                flattened_systems = gui_instance.xdsm.get_flattened_systems()
+                sys_name_to_index = {sys.node_name: i for i, sys in enumerate(flattened_systems)}
+
+                # Register each group with the canvas
+                for group_idx, group in enumerate(groups):
+                    # Map system names to card IDs
+                    system_ids = []
+                    for sys_name in group['systems']:
+                        sys_idx = sys_name_to_index.get(sys_name)
+                        if sys_idx is not None and sys_idx < len(xdsm_grid.system_cards):
+                            card_id = f'card_{id(xdsm_grid.system_cards[sys_idx])}'
+                            system_ids.append(card_id)
+
+                    # Add group to canvas if it has systems
+                    if system_ids:
+                        group_label = group['label']
+                        if isinstance(group_label, (list, tuple)):
+                            group_label = ', '.join(group_label)
+
+                        connection_canvas.add_group(
+                            group_name=group['name'],
+                            group_label=group_label,
+                            system_ids=system_ids,
+                            group_index=group_idx
+                        )
 
             # Show notification with the new order
             system_names = [sys.node_name for sys in gui_instance.xdsm.systems]
