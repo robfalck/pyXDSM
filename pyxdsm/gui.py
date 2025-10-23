@@ -22,6 +22,74 @@ def handle_drop(todo: ToDo, location: str):
     ui.notify(f'"{todo.title}" is now in {location}')
 
 
+class SelectionToolbar(ui.row):
+    """Toolbar that shows the selected system or connection and allows editing its name."""
+
+    def __init__(self, gui_instance, on_name_change_callback=None, on_toggle_group_callback=None):
+        super().__init__()
+        self.gui = gui_instance
+        self.on_name_change_callback = on_name_change_callback
+        self.on_toggle_group_callback = on_toggle_group_callback
+        self.selection_type = None
+        self.selection_id = None
+        self.classes('bg-zinc-100 items-center gap-4 p-2')
+
+        with self:
+            self.type_label = ui.label('No selection').classes('font-bold')
+            self.name_input = ui.input(label='Name', placeholder='Select a system or connection',
+                                      on_change=self._on_name_change)
+            self.name_input.classes('w-96')
+            self.name_input.disable()
+
+            # Expand/Collapse button for groups (hidden by default)
+            self.toggle_button = ui.button('Collapse Group', on_click=self._on_toggle_group)
+            self.toggle_button.classes('ml-4')
+            self.toggle_button.set_visibility(False)
+
+    def set_selection(self, selection_type: str, selection_id, current_name: str, is_expanded: bool = False):
+        """Update the toolbar with the selected element."""
+        self.selection_type = selection_type
+        self.selection_id = selection_id
+
+        if selection_type == 'system':
+            self.type_label.set_text(f'Selected System: {selection_id}')
+            self.toggle_button.set_visibility(False)
+        elif selection_type == 'connection':
+            row, col = selection_id
+            self.type_label.set_text(f'Selected Connection: ({row} → {col})')
+            self.toggle_button.set_visibility(False)
+        elif selection_type == 'group':
+            self.type_label.set_text(f'Selected Group: {selection_id}')
+            self.toggle_button.set_visibility(True)
+            # Update button text based on current state
+            if is_expanded:
+                self.toggle_button.set_text('Collapse Group')
+            else:
+                self.toggle_button.set_text('Expand Group')
+
+        self.name_input.enable()
+        self.name_input.value = current_name
+
+    def clear_selection(self):
+        """Clear the selection."""
+        self.selection_type = None
+        self.selection_id = None
+        self.type_label.set_text('No selection')
+        self.name_input.value = ''
+        self.name_input.disable()
+        self.toggle_button.set_visibility(False)
+
+    def _on_name_change(self, e):
+        """Handle name input changes."""
+        if self.on_name_change_callback and self.selection_type and self.selection_id is not None:
+            self.on_name_change_callback(self.selection_type, self.selection_id, e.value)
+
+    def _on_toggle_group(self):
+        """Handle expand/collapse group button click."""
+        if self.on_toggle_group_callback and self.selection_type == 'group' and self.selection_id:
+            self.on_toggle_group_callback(self.selection_id)
+
+
 class MainToolbar(ui.row):
     def __init__(self, gui_instance, on_new_callback=None):
         super().__init__()
@@ -127,6 +195,8 @@ class XDSMGUI:
     ----------
     xdsm : XDSM
         Reference to the XDSM diagram being displayed/edited
+    collapsed_groups : set
+        Set of group names that should be displayed collapsed
     """
 
     def __init__(self, xdsm: Optional[XDSM] = None):
@@ -139,6 +209,7 @@ class XDSMGUI:
             The XDSM diagram to display and edit. If None, starts with an empty diagram.
         """
         self.xdsm = xdsm if xdsm is not None else XDSM()
+        self.collapsed_groups = set()  # Track which groups are collapsed
 
     def set_xdsm(self, xdsm: XDSM):
         """
@@ -184,6 +255,36 @@ class XDSMGUI:
         # Reorder the systems list
         system = self.xdsm.systems.pop(source_index)
         self.xdsm.systems.insert(target_index, system)
+
+    def toggle_group_expansion(self, group_name: str):
+        """
+        Toggle whether a group is shown expanded or collapsed.
+
+        Parameters
+        ----------
+        group_name : str
+            The name of the group to toggle
+        """
+        if group_name in self.collapsed_groups:
+            self.collapsed_groups.remove(group_name)
+        else:
+            self.collapsed_groups.add(group_name)
+
+    def is_group_collapsed(self, group_name: str) -> bool:
+        """
+        Check if a group is currently collapsed.
+
+        Parameters
+        ----------
+        group_name : str
+            The name of the group to check
+
+        Returns
+        -------
+        bool
+            True if the group is collapsed, False if expanded
+        """
+        return group_name in self.collapsed_groups
 
     def sync_from_disciplines(self, disciplines: list):
         """
@@ -286,29 +387,52 @@ def create_xdsm_element(system_node) -> dnd.XDSMElement:
     return style_class(title=title)
 
 
-def build_disciplines_from_xdsm(xdsm: XDSM) -> list:
+def build_disciplines_from_xdsm(xdsm: XDSM, collapsed_groups: set = None) -> list:
     """
     Build a list of discipline elements from an XDSM object.
 
-    This function flattens any nested XDSM groups and displays all
-    leaf systems as if they are members of the top-level XDSM.
+    This function flattens nested XDSM groups, but respects collapsed_groups
+    and shows them as single icons instead of expanding them.
 
     Parameters
     ----------
     xdsm : XDSM
         The XDSM diagram
+    collapsed_groups : set, optional
+        Set of group names that should be shown collapsed
 
     Returns
     -------
     list
         List of XDSMElement instances for the diagonal
     """
-    # Get flattened systems (this recursively expands nested groups)
-    flattened_systems = xdsm.get_flattened_systems()
-    return [create_xdsm_element(sys) for sys in flattened_systems]
+    if collapsed_groups is None:
+        collapsed_groups = set()
+
+    disciplines = []
+
+    def process_systems(xdsm_instance, prefix=''):
+        for sys in xdsm_instance.systems:
+            full_name = f"{prefix}{sys.node_name}" if prefix else sys.node_name
+
+            if sys.subsystem is not None:
+                # This is a group
+                if full_name in collapsed_groups:
+                    # Show as collapsed - single group icon
+                    disciplines.append(create_xdsm_element(sys))
+                else:
+                    # Show as expanded - flatten the subsystems
+                    group_prefix = f"{full_name}."
+                    process_systems(sys.subsystem, prefix=group_prefix)
+            else:
+                # Regular system
+                disciplines.append(create_xdsm_element(sys))
+
+    process_systems(xdsm)
+    return disciplines
 
 
-def build_connection_matrix(xdsm: XDSM) -> dict:
+def build_connection_matrix(xdsm: XDSM, collapsed_groups: set = None) -> dict:
     """
     Build a matrix of connections from the XDSM.
 
@@ -316,24 +440,59 @@ def build_connection_matrix(xdsm: XDSM) -> dict:
     ----------
     xdsm : XDSM
         The XDSM diagram
+    collapsed_groups : set, optional
+        Set of group names that are collapsed
 
     Returns
     -------
     dict
         Dictionary mapping (row, col) tuples to connection labels
     """
-    # Get flattened systems and connections
-    flattened_systems = xdsm.get_flattened_systems()
-    flattened_connections = xdsm.get_flattened_connections()
+    if collapsed_groups is None:
+        collapsed_groups = set()
 
-    # Create a mapping from node_name to index in the flattened list
-    node_to_index = {sys.node_name: i for i, sys in enumerate(flattened_systems)}
+    # Get disciplines as displayed (respecting collapsed groups)
+    disciplines = build_disciplines_from_xdsm(xdsm, collapsed_groups)
+
+    # Build a mapping from system node_name to displayed discipline index
+    # For collapsed groups, all systems within map to the group's index
+    node_to_display_index = {}
+
+    def map_systems_to_indices(xdsm_instance, prefix='', current_idx=[0]):
+        for sys in xdsm_instance.systems:
+            full_name = f"{prefix}{sys.node_name}" if prefix else sys.node_name
+
+            if sys.subsystem is not None:
+                # This is a group
+                if full_name in collapsed_groups:
+                    # Collapsed: map all subsystems to this group's index
+                    group_idx = current_idx[0]
+                    node_to_display_index[full_name] = group_idx
+
+                    # Map all nested systems to this group's index too
+                    for nested_sys in sys.subsystem.get_flattened_systems(prefix=f"{full_name}."):
+                        node_to_display_index[nested_sys.node_name] = group_idx
+
+                    current_idx[0] += 1
+                else:
+                    # Expanded: recurse into subsystems
+                    group_prefix = f"{full_name}."
+                    map_systems_to_indices(sys.subsystem, prefix=group_prefix, current_idx=current_idx)
+            else:
+                # Regular system
+                node_to_display_index[full_name] = current_idx[0]
+                current_idx[0] += 1
+
+    map_systems_to_indices(xdsm)
+
+    # Get all connections
+    flattened_connections = xdsm.get_flattened_connections()
 
     # Build the connection matrix
     connection_matrix = {}
     for conn in flattened_connections:
-        src_idx = node_to_index.get(conn.src)
-        tgt_idx = node_to_index.get(conn.target)
+        src_idx = node_to_display_index.get(conn.src)
+        tgt_idx = node_to_display_index.get(conn.target)
 
         if src_idx is not None and tgt_idx is not None:
             # Get the label text
@@ -347,15 +506,18 @@ def build_connection_matrix(xdsm: XDSM) -> dict:
                 label_text = f'${label_text}$'
 
             # Store as (row, col) -> label
-            # In XDSM, connection from src to target appears at position (src_row, target_col)
-            # Forward connections (src < target) appear in upper triangle
-            # Backward/feedback connections (src > target) appear in lower triangle
-            connection_matrix[(src_idx, tgt_idx)] = label_text
+            # If multiple connections map to the same cell (due to collapsed groups),
+            # combine their labels
+            key = (src_idx, tgt_idx)
+            if key in connection_matrix:
+                connection_matrix[key] = f"{connection_matrix[key]}, {label_text}"
+            else:
+                connection_matrix[key] = label_text
 
     return connection_matrix
 
 
-def build_output_matrix(xdsm: XDSM) -> dict:
+def build_output_matrix(xdsm: XDSM, collapsed_groups: set = None) -> dict:
     """
     Build a matrix of outputs from the XDSM (right side outputs).
 
@@ -363,25 +525,49 @@ def build_output_matrix(xdsm: XDSM) -> dict:
     ----------
     xdsm : XDSM
         The XDSM diagram
+    collapsed_groups : set, optional
+        Set of group names that are collapsed
 
     Returns
     -------
     dict
         Dictionary mapping row index to list of output labels
     """
-    # Get flattened systems and outputs
-    flattened_systems = xdsm.get_flattened_systems()
-    flattened_outputs = xdsm.get_flattened_outputs()
+    if collapsed_groups is None:
+        collapsed_groups = set()
 
-    # Create a mapping from node_name to index in the flattened list
-    node_to_index = {sys.node_name: i for i, sys in enumerate(flattened_systems)}
+    # Build node to display index mapping (same as in connection matrix)
+    node_to_display_index = {}
+
+    def map_systems_to_indices(xdsm_instance, prefix='', current_idx=[0]):
+        for sys in xdsm_instance.systems:
+            full_name = f"{prefix}{sys.node_name}" if prefix else sys.node_name
+
+            if sys.subsystem is not None:
+                if full_name in collapsed_groups:
+                    group_idx = current_idx[0]
+                    node_to_display_index[full_name] = group_idx
+                    for nested_sys in sys.subsystem.get_flattened_systems(prefix=f"{full_name}."):
+                        node_to_display_index[nested_sys.node_name] = group_idx
+                    current_idx[0] += 1
+                else:
+                    group_prefix = f"{full_name}."
+                    map_systems_to_indices(sys.subsystem, prefix=group_prefix, current_idx=current_idx)
+            else:
+                node_to_display_index[full_name] = current_idx[0]
+                current_idx[0] += 1
+
+    map_systems_to_indices(xdsm)
+
+    # Get flattened outputs
+    flattened_outputs = xdsm.get_flattened_outputs()
 
     # Build the output matrix - each row can have multiple outputs
     output_matrix = {}
     for sys_name, output_node in flattened_outputs.items():
         # Only process right-side outputs
         if output_node.side == 'right':
-            sys_idx = node_to_index.get(sys_name)
+            sys_idx = node_to_display_index.get(sys_name)
             if sys_idx is not None:
                 # Get the label text
                 if isinstance(output_node.label, (list, tuple)):
@@ -397,7 +583,7 @@ def build_output_matrix(xdsm: XDSM) -> dict:
     return output_matrix
 
 
-def build_input_matrix(xdsm: XDSM) -> dict:
+def build_input_matrix(xdsm: XDSM, collapsed_groups: set = None) -> dict:
     """
     Build a matrix of inputs from the XDSM (top inputs).
 
@@ -405,23 +591,47 @@ def build_input_matrix(xdsm: XDSM) -> dict:
     ----------
     xdsm : XDSM
         The XDSM diagram
+    collapsed_groups : set, optional
+        Set of group names that are collapsed
 
     Returns
     -------
     dict
         Dictionary mapping column index to list of input labels
     """
-    # Get flattened systems and inputs
-    flattened_systems = xdsm.get_flattened_systems()
-    flattened_inputs = xdsm.get_flattened_inputs()
+    if collapsed_groups is None:
+        collapsed_groups = set()
 
-    # Create a mapping from node_name to index in the flattened list
-    node_to_index = {sys.node_name: i for i, sys in enumerate(flattened_systems)}
+    # Build node to display index mapping (same as in connection matrix)
+    node_to_display_index = {}
+
+    def map_systems_to_indices(xdsm_instance, prefix='', current_idx=[0]):
+        for sys in xdsm_instance.systems:
+            full_name = f"{prefix}{sys.node_name}" if prefix else sys.node_name
+
+            if sys.subsystem is not None:
+                if full_name in collapsed_groups:
+                    group_idx = current_idx[0]
+                    node_to_display_index[full_name] = group_idx
+                    for nested_sys in sys.subsystem.get_flattened_systems(prefix=f"{full_name}."):
+                        node_to_display_index[nested_sys.node_name] = group_idx
+                    current_idx[0] += 1
+                else:
+                    group_prefix = f"{full_name}."
+                    map_systems_to_indices(sys.subsystem, prefix=group_prefix, current_idx=current_idx)
+            else:
+                node_to_display_index[full_name] = current_idx[0]
+                current_idx[0] += 1
+
+    map_systems_to_indices(xdsm)
+
+    # Get flattened inputs
+    flattened_inputs = xdsm.get_flattened_inputs()
 
     # Build the input matrix - each column can have multiple inputs
     input_matrix = {}
     for sys_name, input_node in flattened_inputs.items():
-        sys_idx = node_to_index.get(sys_name)
+        sys_idx = node_to_display_index.get(sys_name)
         if sys_idx is not None:
             # Get the label text
             if isinstance(input_node.label, (list, tuple)):
@@ -498,22 +708,157 @@ with ui.element('div').classes('w-full h-screen flex flex-col'):
             }, 100);
         ''')
 
+    def on_name_change(selection_type: str, selection_id, new_name: str):
+        """Handle name change from the SelectionToolbar."""
+        if selection_type == 'system':
+            # Update system label in XDSM
+            flattened_systems = gui_instance.xdsm.get_flattened_systems()
+            if 0 <= selection_id < len(flattened_systems):
+                system_node = flattened_systems[selection_id]
+                system_node.label = new_name
+
+                # Rebuild the diagram to reflect the changes
+                scrollable_container.clear()
+                with scrollable_container:
+                    build_xdsm_grid()
+
+                # Trigger KaTeX rendering for the new content
+                ui.run_javascript('''
+                    setTimeout(() => {
+                        if (window.renderMathInElement) {
+                            renderMathInElement(document.body, {
+                                delimiters: [
+                                    {left: "$$", right: "$$", display: true},
+                                    {left: "$", right: "$", display: false}
+                                ]
+                            });
+                        }
+                    }, 100);
+                ''')
+
+        elif selection_type == 'connection':
+            # Update connection label in XDSM
+            row_idx, col_idx = selection_id
+            flattened_systems = gui_instance.xdsm.get_flattened_systems()
+            flattened_connections = gui_instance.xdsm.get_flattened_connections()
+
+            # Find the connection matching the row and column indices
+            if row_idx < len(flattened_systems) and col_idx < len(flattened_systems):
+                src_node = flattened_systems[row_idx]
+                tgt_node = flattened_systems[col_idx]
+
+                for conn in flattened_connections:
+                    if conn.src == src_node.node_name and conn.target == tgt_node.node_name:
+                        conn.label = new_name
+
+                        # Rebuild the diagram to reflect the changes
+                        scrollable_container.clear()
+                        with scrollable_container:
+                            build_xdsm_grid()
+
+                        # Trigger KaTeX rendering for the new content
+                        ui.run_javascript('''
+                            setTimeout(() => {
+                                if (window.renderMathInElement) {
+                                    renderMathInElement(document.body, {
+                                        delimiters: [
+                                            {left: "$$", right: "$$", display: true},
+                                            {left: "$", right: "$", display: false}
+                                        ]
+                                    });
+                                }
+                            }, 100);
+                        ''')
+                        break
+
     # Create toolbar with new callback
     MainToolbar(gui_instance=gui_instance, on_new_callback=refresh_diagram)
 
     # Scrollable container for the XDSM diagram
     scrollable_container = ui.element('div').classes('relative flex-1 overflow-auto')
 
+    # Container for callback state
+    class CallbackState:
+        connection_canvas = None
+
+    def on_toggle_group(group_name: str):
+        """Handle expand/collapse toggle for a group."""
+        gui_instance.toggle_group_expansion(group_name)
+
+        # Rebuild the diagram to reflect the change
+        scrollable_container.clear()
+        with scrollable_container:
+            build_xdsm_grid()
+
+        # Trigger KaTeX rendering for the new content
+        ui.run_javascript('''
+            setTimeout(() => {
+                if (window.renderMathInElement) {
+                    renderMathInElement(document.body, {
+                        delimiters: [
+                            {left: "$$", right: "$$", display: true},
+                            {left: "$", right: "$", display: false}
+                        ]
+                    });
+                }
+            }, 100);
+        ''')
+
+    # Create selection toolbar with callbacks
+    selection_toolbar = SelectionToolbar(gui_instance=gui_instance, on_name_change_callback=on_name_change,
+                                        on_toggle_group_callback=on_toggle_group)
+
+    def on_selection(selection_type: str, selection_id, current_name: str):
+        """Handle selection of a system or connection."""
+        # For groups, check if they're expanded
+        is_expanded = False
+        if selection_type == 'group':
+            is_expanded = not gui_instance.is_group_collapsed(selection_id)
+        selection_toolbar.set_selection(selection_type, selection_id, current_name, is_expanded)
+
+    def on_group_click(event_data):
+        """Handle group selection from ConnectionCanvas."""
+        group_name = event_data['name']
+        group_label = event_data['label']
+        is_expanded = not gui_instance.is_group_collapsed(group_name)
+
+        # Clear system/connection selection
+        if dnd.System.selected:
+            old_id = f'card_{id(dnd.System.selected)}'
+            ui.run_javascript(f'''
+                const el = document.getElementById('{old_id}');
+                if (el) el.style.border = 'none';
+            ''')
+            dnd.System.selected = None
+        if dnd.Connection.selected:
+            conn_id = dnd.Connection.selected.connection_id if dnd.Connection.selected.connection_id else f'conn_{dnd.Connection.selected.row_idx}_{dnd.Connection.selected.col_idx}'
+            ui.run_javascript(f'''
+                const el = document.getElementById('{conn_id}');
+                if (el) el.style.border = 'none';
+            ''')
+            dnd.Connection.selected = None
+
+        # Update selection toolbar
+        selection_toolbar.set_selection('group', group_name, group_label, is_expanded)
+
+        # Highlight the group
+        if CallbackState.connection_canvas:
+            CallbackState.connection_canvas.highlight_group(group_name)
+
     def build_xdsm_grid():
         """Build the XDSM grid from the current XDSM object."""
+        # Set selection callback for System and Connection classes
+        dnd.System.on_select_callback = on_selection
+        dnd.Connection.on_select_callback = on_selection
+
         # Create the connection canvas for drawing lines
-        connection_canvas = dnd.ConnectionCanvas()
+        CallbackState.connection_canvas = dnd.ConnectionCanvas()
 
         # Build disciplines, connections, outputs, and inputs from the XDSM
-        disciplines = build_disciplines_from_xdsm(gui_instance.xdsm)
-        connections = build_connection_matrix(gui_instance.xdsm)
-        outputs = build_output_matrix(gui_instance.xdsm)
-        inputs = build_input_matrix(gui_instance.xdsm)
+        disciplines = build_disciplines_from_xdsm(gui_instance.xdsm, gui_instance.collapsed_groups)
+        connections = build_connection_matrix(gui_instance.xdsm, gui_instance.collapsed_groups)
+        outputs = build_output_matrix(gui_instance.xdsm, gui_instance.collapsed_groups)
+        inputs = build_input_matrix(gui_instance.xdsm, gui_instance.collapsed_groups)
 
         # Calculate number of columns: systems + output column (if there are outputs)
         num_cols = len(disciplines) + (1 if outputs else 0)
@@ -529,19 +874,23 @@ with ui.element('div').classes('w-full h-screen flex flex-col'):
             connections=connections,
             outputs=outputs,
             inputs=inputs,
-            canvas=connection_canvas,
+            canvas=CallbackState.connection_canvas,
             columns=num_cols
         ).classes('gap-x-1 gap-y-8 mt-8').style(f'min-width: {grid_width}px; width: {grid_width}px;')
 
-        # Add group backgrounds to the canvas
+        # Add group backgrounds to the canvas (only for expanded groups)
         groups = gui_instance.xdsm.get_group_info()
         if groups:
             # Get flattened systems to map names to indices
             flattened_systems = gui_instance.xdsm.get_flattened_systems()
             sys_name_to_index = {sys.node_name: i for i, sys in enumerate(flattened_systems)}
 
-            # Register each group with the canvas
+            # Register each group with the canvas (but skip collapsed ones)
             for group_idx, group in enumerate(groups):
+                # Skip collapsed groups - they're shown as single icons
+                if group['name'] in gui_instance.collapsed_groups:
+                    continue
+
                 # Map system names to card IDs
                 system_ids = []
                 for sys_name in group['systems']:
@@ -556,12 +905,25 @@ with ui.element('div').classes('w-full h-screen flex flex-col'):
                     if isinstance(group_label, (list, tuple)):
                         group_label = ', '.join(group_label)
 
-                    connection_canvas.add_group(
+                    CallbackState.connection_canvas.add_group(
                         group_name=group['name'],
                         group_label=group_label,
                         system_ids=system_ids,
                         group_index=group_idx
                     )
+
+                    # Create clickable overlay for this group
+                    def make_click_handler(gname, glabel):
+                        def handler(name, label):
+                            on_group_click({'name': name, 'label': label})
+                        return handler
+
+                    overlay = dnd.GroupOverlay(
+                        group_name=group['name'],
+                        group_label=group_label,
+                        on_click=make_click_handler(group['name'], group_label)
+                    )
+                    CallbackState.connection_canvas.group_overlays.append(overlay)
 
         def on_reorder(reordered_disciplines):
             """Handle reordering of disciplines in the GUI."""
@@ -569,22 +931,29 @@ with ui.element('div').classes('w-full h-screen flex flex-col'):
             gui_instance.sync_from_disciplines(reordered_disciplines)
 
             # Rebuild the connection, output, and input matrices based on the new system order
-            new_connections = build_connection_matrix(gui_instance.xdsm)
-            new_outputs = build_output_matrix(gui_instance.xdsm)
-            new_inputs = build_input_matrix(gui_instance.xdsm)
+            new_connections = build_connection_matrix(gui_instance.xdsm, gui_instance.collapsed_groups)
+            new_outputs = build_output_matrix(gui_instance.xdsm, gui_instance.collapsed_groups)
+            new_inputs = build_input_matrix(gui_instance.xdsm, gui_instance.collapsed_groups)
 
             # Update the grid with the new connections, outputs, and inputs
             xdsm_grid.update_connections(new_connections, new_outputs, new_inputs)
 
-            # Re-register group backgrounds after reordering
+            # Re-register group backgrounds after reordering (only for expanded groups)
             groups = gui_instance.xdsm.get_group_info()
             if groups:
                 # Get flattened systems to map names to indices
                 flattened_systems = gui_instance.xdsm.get_flattened_systems()
                 sys_name_to_index = {sys.node_name: i for i, sys in enumerate(flattened_systems)}
 
-                # Register each group with the canvas
+                # Clear old overlays
+                CallbackState.connection_canvas.group_overlays.clear()
+
+                # Register each group with the canvas (but skip collapsed ones)
                 for group_idx, group in enumerate(groups):
+                    # Skip collapsed groups - they're shown as single icons
+                    if group['name'] in gui_instance.collapsed_groups:
+                        continue
+
                     # Map system names to card IDs
                     system_ids = []
                     for sys_name in group['systems']:
@@ -599,12 +968,29 @@ with ui.element('div').classes('w-full h-screen flex flex-col'):
                         if isinstance(group_label, (list, tuple)):
                             group_label = ', '.join(group_label)
 
-                        connection_canvas.add_group(
+                        CallbackState.connection_canvas.add_group(
                             group_name=group['name'],
                             group_label=group_label,
                             system_ids=system_ids,
                             group_index=group_idx
                         )
+
+                        # Create clickable overlay for this group (in reorder)
+                        def make_click_handler_reorder(gname, glabel):
+                            def handler(name, label):
+                                on_group_click({'name': name, 'label': label})
+                            return handler
+
+                        overlay = dnd.GroupOverlay(
+                            group_name=group['name'],
+                            group_label=group_label,
+                            on_click=make_click_handler_reorder(group['name'], group_label)
+                        )
+                        CallbackState.connection_canvas.group_overlays.append(overlay)
+
+                # Position overlays after groups are redrawn (only if there are any)
+                if CallbackState.connection_canvas.group_overlays:
+                    ui.timer(0.15, CallbackState.connection_canvas.position_overlays, once=True)
 
             # Show notification with the new order
             system_names = [sys.node_name for sys in gui_instance.xdsm.systems]

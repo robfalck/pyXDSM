@@ -431,6 +431,7 @@ class XDSM(BaseModel):
             - 'label': Group label
             - 'systems': List of flattened system names in this group
             - 'depth': Nesting depth (0 for top-level groups)
+            - 'is_expanded': True if group is expanded (showing subsystems)
         """
         groups = []
 
@@ -450,7 +451,8 @@ class XDSM(BaseModel):
                         'name': full_group_name,
                         'label': sys.label,
                         'systems': group_systems,
-                        'depth': depth
+                        'depth': depth,
+                        'is_expanded': True  # Groups that show up here are expanded
                     })
 
                     # Recursively collect nested groups
@@ -458,6 +460,49 @@ class XDSM(BaseModel):
 
         collect_groups(self)
         return groups
+
+    def is_group_expanded(self, group_name: str) -> bool:
+        """
+        Check if a group is currently expanded.
+
+        Parameters
+        ----------
+        group_name : str
+            The group name (can include dot notation for nested groups)
+
+        Returns
+        -------
+        bool
+            True if the group is expanded (subsystem is not None), False otherwise
+        """
+        def find_system(name, prefix=''):
+            for sys in self.systems:
+                full_name = f"{prefix}{sys.node_name}" if prefix else sys.node_name
+                if full_name == name:
+                    return sys
+
+                # Check nested groups
+                if sys.subsystem is not None:
+                    group_prefix = f"{full_name}."
+                    result = find_in_subsystem(sys.subsystem, name, group_prefix)
+                    if result:
+                        return result
+            return None
+
+        def find_in_subsystem(xdsm_inst, full_name, prefix):
+            for sys in xdsm_inst.systems:
+                sys_full_name = f"{prefix}{sys.node_name}"
+                if sys_full_name == full_name:
+                    return sys
+
+                if sys.subsystem is not None:
+                    result = find_in_subsystem(sys.subsystem, full_name, f"{sys_full_name}.")
+                    if result:
+                        return result
+            return None
+
+        system = find_system(group_name)
+        return system is not None and system.subsystem is not None
 
     def swap_systems(self, system1_name: str, system2_name: str) -> None:
         """

@@ -4,6 +4,21 @@ from pydantic import BaseModel, Field
 from nicegui import ui
 
 
+class GroupOverlay(ui.element):
+    """Invisible clickable overlay for group selection."""
+
+    def __init__(self, group_name: str, group_label: str, on_click: Callable):
+        super().__init__('div')
+        self.group_name = group_name
+        self.group_label = group_label
+        self.classes('absolute cursor-pointer')
+        self.props(f'id="group_overlay_{group_name}"')
+        # Completely transparent but clickable
+        self.style('background: transparent; z-index: 10; pointer-events: all;')
+        # Event handlers receive an event argument, so we need to accept it
+        self.on('click', lambda _: on_click(group_name, group_label))
+
+
 class ConnectionCanvas(ui.html):
     """SVG canvas for drawing connection lines and group backgrounds between systems."""
 
@@ -15,14 +30,18 @@ class ConnectionCanvas(ui.html):
         {'bg': 'rgba(240, 230, 200, 0.12)', 'border': 'rgba(180, 160, 100, 0.35)'},  # Gold
     ]
 
+    on_group_select_callback: Optional[Callable] = None
+    selected_group: Optional[str] = None
+
     def __init__(self) -> None:
         svg_content = '''
-        <svg id="connection_canvas" class="absolute top-0 left-0 w-full h-full pointer-events-none" style="z-index: -1">
+        <svg id="connection_canvas" class="absolute top-0 left-0 w-full h-full" style="z-index: -1">
         </svg>
         '''
         super().__init__(content=svg_content, sanitize=False)
         self.connections = []
         self.groups = []
+        self.group_overlays = []
 
     def add_connection(self, source_id: str, target_id: str, data_id: str, is_feedback: bool):
         """
@@ -86,6 +105,59 @@ class ConnectionCanvas(ui.html):
             'systems': system_ids,
             'color_index': group_index % len(self.GROUP_COLORS)
         })
+
+    def position_overlays(self):
+        """Position group overlays to match the group rectangles."""
+        if not self.group_overlays:
+            return
+
+        js_code = '''
+        const groups = %s;
+
+        groups.forEach(group => {
+            const groupRect = document.getElementById('group_' + group.name);
+            const overlay = document.getElementById('group_overlay_' + group.name);
+
+            if (groupRect && overlay) {
+                const rect = groupRect.getBoundingClientRect();
+                const container = overlay.parentElement.getBoundingClientRect();
+
+                overlay.style.left = (rect.left - container.left) + 'px';
+                overlay.style.top = (rect.top - container.top) + 'px';
+                overlay.style.width = rect.width + 'px';
+                overlay.style.height = rect.height + 'px';
+            }
+        });
+        ''' % str([{'name': g['name']} for g in self.groups]).replace("'", '"')
+
+        ui.run_javascript(js_code)
+
+    def highlight_group(self, group_name: str):
+        """Highlight a selected group."""
+        self.selected_group = group_name
+        js_code = f'''
+        // Remove previous highlights
+        document.querySelectorAll('[id^="group_"]').forEach(rect => {{
+            rect.setAttribute('stroke-width', '2');
+        }});
+
+        // Highlight the selected group
+        const groupRect = document.getElementById('group_{group_name}');
+        if (groupRect) {{
+            groupRect.setAttribute('stroke-width', '4');
+        }}
+        '''
+        ui.run_javascript(js_code)
+
+    def clear_group_highlight(self):
+        """Clear all group highlights."""
+        self.selected_group = None
+        js_code = '''
+        document.querySelectorAll('[id^="group_"]').forEach(rect => {
+            rect.setAttribute('stroke-width', '2');
+        });
+        '''
+        ui.run_javascript(js_code)
 
     def draw_connections(self):
         """Draw all group backgrounds and connections on the canvas."""
@@ -155,6 +227,9 @@ class ConnectionCanvas(ui.html):
             rect.setAttribute('stroke-width', '2');
             rect.setAttribute('stroke-dasharray', '4 4');  // Dashed border
             rect.setAttribute('opacity', '1');
+            rect.setAttribute('id', 'group_' + group.name);
+            rect.setAttribute('data-group-name', group.name);
+            rect.setAttribute('data-group-label', group.label);
 
             svg.appendChild(rect);
 
@@ -587,9 +662,16 @@ class DataIO(XDSMElement):
 class Connection(ui.card):
     """Display card for connections between systems."""
 
-    def __init__(self, xdsm_element: XDSMElement, connection_id: Optional[str] = None) -> None:
+    selected: Optional['Connection'] = None
+    on_select_callback: Optional[Callable] = None
+
+    def __init__(self, xdsm_element: XDSMElement, connection_id: Optional[str] = None,
+                 row_idx: int = -1, col_idx: int = -1) -> None:
         super().__init__()
         self.xdsm_element = xdsm_element
+        self.row_idx = row_idx
+        self.col_idx = col_idx
+        self.connection_id = connection_id  # Store the ID for later use
 
         # Set unique ID for line connections if provided
         if connection_id:
@@ -598,6 +680,9 @@ class Connection(ui.card):
         # Apply styling from XDSMElement
         if xdsm_element.classes:
             self.classes(xdsm_element.classes)
+
+        # Add cursor pointer for clickability
+        self.classes('cursor-pointer')
 
         # Apply inline styles from XDSMElement
         if xdsm_element.style:
@@ -608,14 +693,55 @@ class Connection(ui.card):
             # Use HTML to render LaTeX with KaTeX
             ui.html(f'<div class="text-center text-xs font-semibold katex-content" style="transform: skewX(15deg);">{xdsm_element.title}</div>', sanitize=False)
 
+        # Make connection clickable
+        self.on('click', self.handle_click)
+
+    def handle_click(self, _):
+        """Handle click event to select this connection."""
+        # Deselect previous system selection
+        if System.selected:
+            old_id = f'card_{id(System.selected)}'
+            ui.run_javascript(f'''
+                const el = document.getElementById('{old_id}');
+                if (el) el.style.border = 'none';
+            ''')
+            System.selected = None
+
+        # Deselect previous connection selection
+        if Connection.selected and Connection.selected != self:
+            old_id = self._get_connection_id(Connection.selected)
+            ui.run_javascript(f'''
+                const el = document.getElementById('{old_id}');
+                if (el) el.style.border = 'none';
+            ''')
+
+        # Select this connection with thick blue border
+        Connection.selected = self
+        conn_id = self._get_connection_id(self)
+        ui.run_javascript(f'''
+            const el = document.getElementById('{conn_id}');
+            if (el) el.style.border = '4px solid #3b82f6';
+        ''')
+
+        # Call the selection callback
+        if Connection.on_select_callback:
+            Connection.on_select_callback('connection', (self.row_idx, self.col_idx), self.xdsm_element.title)
+
+    def _get_connection_id(self, conn):
+        """Get the DOM ID for a connection element."""
+        return conn.connection_id if conn.connection_id else f'conn_{conn.row_idx}_{conn.col_idx}'
+
 
 class System(ui.card):
 
     dragged: Optional['System'] = None
+    selected: Optional['System'] = None
+    on_select_callback: Optional[Callable] = None
 
-    def __init__(self, xdsm_element: XDSMElement) -> None:
+    def __init__(self, xdsm_element: XDSMElement, system_index: int = -1) -> None:
         super().__init__()
         self.xdsm_element = xdsm_element
+        self.system_index = system_index
 
         # Set unique ID for arrow connections
         self.props(f'id="card_{id(self)}"')
@@ -639,6 +765,7 @@ class System(ui.card):
         self.props('draggable')
         self.on('dragstart', self.handle_dragstart)
         self.on('dragend', self.handle_dragend)
+        self.on('click', self.handle_click)
 
     def handle_dragstart(self, _):
         System.dragged = self
@@ -646,6 +773,28 @@ class System(ui.card):
 
     def handle_dragend(self, _):
         self.classes(remove='opacity-50')
+
+    def handle_click(self, _):
+        """Handle click event to select this system."""
+        # Deselect previous selection
+        if System.selected and System.selected != self:
+            old_id = f'card_{id(System.selected)}'
+            ui.run_javascript(f'''
+                const el = document.getElementById('{old_id}');
+                if (el) el.style.border = 'none';
+            ''')
+
+        # Select this system with thick blue border
+        System.selected = self
+        card_id = f'card_{id(self)}'
+        ui.run_javascript(f'''
+            const el = document.getElementById('{card_id}');
+            if (el) el.style.border = '4px solid #3b82f6';
+        ''')
+
+        # Call the selection callback
+        if System.on_select_callback:
+            System.on_select_callback('system', self.system_index, self.xdsm_element.title)
 
 
 class DragGrid(ui.grid):
@@ -762,7 +911,7 @@ class DragGrid(ui.grid):
                             # Within the main n x n grid
                             if sys_row == j:
                                 # Diagonal: discipline boxes
-                                system = System(self.disciplines[sys_row])
+                                system = System(self.disciplines[sys_row], system_index=sys_row)
                                 self.system_cards.append(system)
 
                                 # Add drop zone behavior to the system card
@@ -776,7 +925,8 @@ class DragGrid(ui.grid):
                                     # Connection exists - display it using DataInter style
                                     conn_id = f'conn_{sys_row}_{j}'
                                     with ui.element('div').classes('w-40 h-20 flex items-center justify-center'):
-                                        conn_card = Connection(DataInter(title=conn_label), connection_id=conn_id)
+                                        conn_card = Connection(DataInter(title=conn_label), connection_id=conn_id,
+                                                             row_idx=sys_row, col_idx=j)
                                         self.connection_cards[(sys_row, j)] = conn_card
 
                                     # Defer connection registration until all systems are created
@@ -825,6 +975,8 @@ class DragGrid(ui.grid):
         # Draw connections after rendering is complete
         if self.canvas:
             ui.timer(0.1, self.canvas.draw_connections, once=True)
+            # Position overlays after a slight delay to ensure layout is complete
+            ui.timer(0.15, self.canvas.position_overlays, once=True)
 
         # Render all LaTeX expressions using KaTeX
         ui.timer(0.15, lambda: ui.run_javascript('''
