@@ -31,3 +31,6 @@ x.add_output("G", "g^*", side=LEFT)
 x.write("mdf")
 
 x.to_json("mdf.json")
+
+x.to_mermaid("mdf.html")
+

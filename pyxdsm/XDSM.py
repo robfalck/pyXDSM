@@ -588,6 +588,20 @@ class XDSM(BaseModel):
                     json_str = json.dumps(spec, indent=2)
                     f.write(json_str)
 
+    def to_mermaid(self, file_name: Optional[str] = None) -> None:
+        """
+        Output a Mermaid.js block diagram (block-beta layout) that represents the XDSM structure.
+
+        Parameters
+        ----------
+        file_name : str, optional
+            The file name to write the Mermaid diagram to. If None, prints to stdout.
+            If the file ends with '.html', it writes an HTML file with the diagram embedded.
+        """
+        from pyxdsm.xdsm_mermaid_writer import XDSMMermaidWriter
+
+        XDSMMermaidWriter.write(self, file_name)
+
     def to_json(self, filename: Optional[str] = None) -> str:
         """
         Get the JSON representation of the XDSM, and optioally write to file.
