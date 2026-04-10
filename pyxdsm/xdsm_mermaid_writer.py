@@ -89,8 +89,32 @@ class XDSMMermaidWriter:
                 else:
                     right_outs[i] = node
 
+        # Gather inputs mapping
+        inputs_by_idx = {}
+        for comp_name, inp in xdsm.inputs.items():
+            if comp_name in sys_idx:
+                idx = sys_idx[comp_name]
+                inputs_by_idx[idx] = inp
+
         used_classes = set()
         node_class_assignments = []
+
+        # Build input row (always first row, even if empty)
+        input_row_items = []
+        input_row_items.append("space")  # Left output column
+        for j in range(num_systems):
+            if j in inputs_by_idx:
+                inp_node = inputs_by_idx[j]
+                l_b, r_b = borders.get("DataIO", ("[/", "/]"))
+                lbl = XDSMMermaidWriter._format_label(inp_node.label, inp_node.label_width)
+                node_id = XDSMMermaidWriter._sanitize_name(inp_node.node_name)
+                input_row_items.append(f"{node_id}{l_b}{lbl}{r_b}")
+                node_class_assignments.append(f"  class {node_id} DataIO")
+                used_classes.add("DataIO")
+            else:
+                input_row_items.append("space")
+        input_row_items.append("space")  # Right output column
+        lines.append("  " + " ".join(input_row_items))
 
         for i, sys_node in enumerate(xdsm.systems):
             row_items = []
@@ -278,6 +302,26 @@ class XDSMMermaidWriter:
             else:
                 # Direct connection if no intermediate connections
                 lines.append(f"  {src_name} --- {node_id}")
+
+        # Draw edges for inputs (downward connections)
+        for comp_name, inp in xdsm.inputs.items():
+            if comp_name in sys_idx:
+                tgt_i = sys_idx[comp_name]
+                tgt_name = XDSMMermaidWriter._sanitize_name(comp_name)
+                inp_name = XDSMMermaidWriter._sanitize_name(inp.node_name)
+
+                # Find all connection nodes in this column that are between input row and target system
+                intermediate_conns = []
+                for row_k in range(tgt_i):
+                    if (row_k, tgt_i) in conn_map:
+                        intermediate_conns.append(f"conn_{row_k}_{tgt_i}")
+
+                # Build path from input through intermediates to system
+                conn_path = [inp_name] + intermediate_conns + [tgt_name]
+
+                # Draw edges along the path
+                for k in range(len(conn_path) - 1):
+                    lines.append(f"  {conn_path[k]} --- {conn_path[k+1]}")
 
         lines.append("")
         for cls_name in sorted(used_classes):
